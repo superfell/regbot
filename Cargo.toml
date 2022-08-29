@@ -13,6 +13,7 @@ sha2 = "0.10.2"
 base64 = "0.13.0"
 anyhow = { version="1", features=["backtrace"] }
 chrono = { version="0.4.19", features=["serde"] }
+regex="1"
 
 [dependencies.tokio]
 version = "1.0"
@@ -20,5 +21,6 @@ features = ["macros", "rt-multi-thread"]
 
 [dependencies.serenity]
 version = "0.11"
+# features = ["framework", "standard_framework", "rustls_backend"]
 default-features = false
 features = ["client", "gateway", "rustls_backend", "model"]

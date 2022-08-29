@@ -78,6 +78,7 @@ impl IrClient {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn season_list(&self, year: i64, quarter: i64) -> Result<SeasonList, anyhow::Error> {
         assert!((1..=4).contains(&quarter));
         self.fetch(&format!(
@@ -143,7 +144,7 @@ pub struct RaceGuideEntry {
     pub entry_count: i64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Season {
     pub active: bool,
     pub official: bool,
@@ -158,7 +159,7 @@ pub struct Season {
     pub schedules: Vec<Schedule>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Schedule {
     pub series_id: i64,
     pub season_id: i64,
@@ -168,7 +169,7 @@ pub struct Schedule {
     pub track: Track,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
     pub track_id: i64,
     pub track_name: String,
