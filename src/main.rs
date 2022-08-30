@@ -1,10 +1,10 @@
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use ir::Season;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent};
-use regex::RegexBuilder;
 use serenity::async_trait;
 use serenity::http::Http;
 use serenity::model::application::command::CommandOptionType;
@@ -12,6 +12,7 @@ use serenity::model::application::interaction::application_command::CommandDataO
 use serenity::model::application::interaction::{Interaction, InteractionResponseType};
 use serenity::model::gateway::Ready;
 use serenity::model::id::GuildId;
+use serenity::model::prelude::interaction::application_command::CommandDataOption;
 use serenity::model::prelude::ChannelId;
 use serenity::prelude::Context;
 use serenity::prelude::EventHandler;
@@ -23,12 +24,41 @@ use tokio::sync::mpsc::Receiver;
 mod ir;
 mod ir_watcher;
 
-#[derive(Default)]
-struct HandlerState {
-    // rx: Arc<tokio::sync::Mutex<Receiver<RaceGuideEvent>>>,
-    seasons: Vec<Season>,
+struct SeasonInfo {
+    series_id: i64,
+    name: String,
+    lc_name: String,
+}
+impl SeasonInfo {
+    fn new(s: &Season) -> Self {
+        let n = s.series_name();
+        SeasonInfo {
+            series_id: s.series_id,
+            name: n.to_string(),
+            lc_name: n.to_lowercase(),
+        }
+    }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct Reg {
+    guild: Option<GuildId>,
+    channel: ChannelId,
+    series_id: i64,
+    min_reg: i64,
+    max_reg: i64,
+    open: bool,
+    close: bool,
+}
+
+#[derive(Default)]
+struct HandlerState {
+    seasons: HashMap<i64, SeasonInfo>,
+    reg: HashMap<ChannelId, Vec<Reg>>,
+}
+
+#[derive(Default)]
 struct Handler {
     state: Arc<Mutex<HandlerState>>,
 }
@@ -48,14 +78,49 @@ impl Handler {
             let e = rx.recv().await;
             if let Some(evt) = e {
                 match evt {
-                    RaceGuideEvent::Announcements(msgs) => announce(&http, msgs).await,
+                    RaceGuideEvent::Announcements(msgs) => {
+                        let reg;
+                        {
+                            let st = state.lock().expect("Unable to lock state");
+                            reg = st.reg.clone();
+                        }
+                        announce(&http, reg, msgs).await;
+                    }
                     RaceGuideEvent::Seasons(s) => {
-                        let mut asb = state.lock().expect("Unable to lock state");
-                        asb.seasons = s;
+                        let si = s
+                            .iter()
+                            .map(|s| (s.series_id, SeasonInfo::new(s)))
+                            .collect();
+                        let mut st = state.lock().expect("Unable to lock state");
+                        st.seasons = si;
                     }
                 }
             }
         }
+    }
+}
+fn resolve_option_i64(opts: &Vec<CommandDataOption>, opt_idx: usize, def_val: i64) -> i64 {
+    match opts.get(opt_idx) {
+        None => def_val,
+        Some(ov) => match ov.resolved {
+            Some(CommandDataOptionValue::Integer(i)) => i,
+            _ => {
+                println!("unexpected value {:?}", ov);
+                def_val
+            }
+        },
+    }
+}
+fn resolve_option_bool(opts: &Vec<CommandDataOption>, opt_idx: usize, def_val: bool) -> bool {
+    match opts.get(opt_idx) {
+        None => def_val,
+        Some(ov) => match ov.resolved {
+            Some(CommandDataOptionValue::Boolean(i)) => i,
+            _ => {
+                println!("unexpected value {:?}", ov);
+                def_val
+            }
+        },
     }
 }
 #[async_trait]
@@ -71,18 +136,12 @@ impl EventHandler for Handler {
                                     Some(serde_json::Value::String(s)) => s,
                                     _ => "",
                                 };
-                                let re = RegexBuilder::new(&regex::escape(search_txt))
-                                    .case_insensitive(true)
-                                    .build()
-                                    .unwrap();
-                                let state = self.state.lock().expect("unable to lock state");
                                 let mut count = 0;
-                                for season in &state.seasons {
-                                    if re.is_match(&season.season_name) {
-                                        response.add_string_choice(
-                                            &season.season_name,
-                                            season.series_id,
-                                        );
+                                let lc_txt = search_txt.to_lowercase();
+                                let state = self.state.lock().expect("unable to lock state");
+                                for season in state.seasons.values() {
+                                    if season.lc_name.contains(&lc_txt) {
+                                        response.add_string_choice(&season.name, season.series_id);
                                         count += 1;
                                         if count == 25 {
                                             break;
@@ -99,57 +158,51 @@ impl EventHandler for Handler {
                 }
             }
         } else if let Interaction::ApplicationCommand(command) = interaction {
-            println!("Received command interaction: {:#?}", command);
-
-            let content = match command.data.name.as_str() {
-                "ping" => "Hey, I'm alive!".to_string(),
-                "id" => {
-                    let options = command
-                        .data
-                        .options
-                        .get(0)
-                        .expect("Expected user option")
-                        .resolved
-                        .as_ref()
-                        .expect("Expected user object");
-
-                    if let CommandDataOptionValue::User(user, _member) = options {
-                        format!("{}'s id is {}", user.tag(), user.id)
-                    } else {
-                        "Please provide a valid user".to_string()
-                    }
+            if command.data.name == "reg" {
+                let series_id = match command.data.options[0].resolved.as_ref().unwrap() {
+                    CommandDataOptionValue::String(x) => x.parse(),
+                    CommandDataOptionValue::Integer(x) => Ok(*x),
+                    _ => Ok(414),
                 }
-                "attachmentinput" => {
-                    let options = command
-                        .data
-                        .options
-                        .get(0)
-                        .expect("Expected attachment option")
-                        .resolved
-                        .as_ref()
-                        .expect("Expected attachment object");
+                .expect("Failed to parse series_id");
+                let min_reg = resolve_option_i64(&command.data.options, 1, 1);
+                let max_reg = resolve_option_i64(&command.data.options, 2, 15);
+                let open = resolve_option_bool(&command.data.options, 3, false);
+                let close = resolve_option_bool(&command.data.options, 4, false);
 
-                    if let CommandDataOptionValue::Attachment(attachment) = options {
-                        format!(
-                            "Attachment name: {}, attachment size: {}",
-                            attachment.filename, attachment.size
-                        )
-                    } else {
-                        "Please provide a valid attachment".to_string()
-                    }
+                let mut msg = format!("Okay, I will message this channel about registration for series {:?} when it reaches at least {} reg, and stop after reg reaches {}.", series_id, min_reg,max_reg);
+                msg.push_str(match (open, close) {
+                    (true, true) => " I'll also say when registration opens and closes.",
+                    (true, false) => " I'll also say when registration opens.",
+                    (false, true) => " I'll also say when registration closes.",
+                    (false, false) => "",
+                });
+                let reg = Reg {
+                    guild: command.guild_id,
+                    channel: command.channel_id,
+                    series_id,
+                    min_reg,
+                    max_reg,
+                    open,
+                    close,
+                };
+                {
+                    let mut st = self.state.lock().expect("Unable to lock state");
+                    st.reg
+                        .entry(reg.channel)
+                        .or_insert_with(|| Vec::new())
+                        .push(reg);
                 }
-                _ => "not implemented :(".to_string(),
-            };
-
-            if let Err(why) = command
-                .create_interaction_response(&ctx.http, |response| {
-                    response
-                        .kind(InteractionResponseType::ChannelMessageWithSource)
-                        .interaction_response_data(|message| message.content(content))
-                })
-                .await
-            {
-                println!("Cannot respond to slash command: {}", why);
+                if let Err(why) = command
+                    .create_interaction_response(&ctx.http, |response| {
+                        response
+                            .kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|message| message.content(msg))
+                    })
+                    .await
+                {
+                    println!("Cannot respond to slash command: {}", why);
+                }
             }
         }
     }
@@ -166,7 +219,7 @@ impl EventHandler for Handler {
         //         .expect("GUILD_ID must be an integer"),
         // );
 
-        let commands = GuildId::set_application_commands(&guild_id, &ctx.http, |commands| {
+        let _commands = GuildId::set_application_commands(&guild_id, &ctx.http, |commands| {
             commands
                 .create_application_command(|command| {
                     command.name("ping").description("A ping command")
@@ -229,11 +282,7 @@ async fn main() {
 
     // Build our client.
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
-    let handler = Handler {
-        state: Arc::new(Mutex::new(HandlerState {
-            seasons: Vec::new(),
-        })),
-    };
+    let handler = Handler::default();
     handler.listen_for_race_guide(token.clone(), rx);
     let mut client = Client::builder(token, GatewayIntents::non_privileged())
         .event_handler(handler)
@@ -250,25 +299,55 @@ async fn main() {
     }
 }
 
-async fn announce(http: impl AsRef<Http>, msgs: Vec<(i64, String)>) {
-    println!("{} announcements", msgs.len());
-    let x = ChannelId(1013223479992127498);
-    let mut concatted = String::new();
-    for msg in msgs {
-        if concatted.len() + 1 + msg.1.len() > 1950 {
-            let r = x.say(&http, &concatted).await;
-            if let Err(e) = r {
-                println!("announce got error: {:?}", e);
+async fn announce(
+    http: impl AsRef<Http>,
+    reg: HashMap<ChannelId, Vec<Reg>>,
+    msgs: Vec<(i64, String)>,
+) {
+    println!("{} announcements, {} reg", msgs.len(), reg.len());
+    // many reg may want the same series_id. and we can message a number of msgs to a single channel at once.
+    // so we want to group the reg by channel_id
+    for (ch, regs) in reg {
+        let mut msger = Messenger::new(ch, http.as_ref());
+        for msg in &msgs {
+            for reg in &regs {
+                if msg.0 == reg.series_id {
+                    msger.add(&msg.1).await;
+                    break;
+                }
             }
-            concatted.clear();
         }
-        concatted.push('\n');
-        concatted.push_str(&msg.1);
+        msger.flush().await;
     }
-    if !concatted.is_empty() {
-        let r = x.say(&http, &concatted).await;
-        if let Err(e) = r {
-            println!("announce got error: {:?}", e);
+}
+
+struct Messenger<'a> {
+    http: &'a Http,
+    ch: ChannelId,
+    buf: String,
+}
+impl<'a> Messenger<'a> {
+    fn new(ch: ChannelId, http: &'a Http) -> Self {
+        Messenger {
+            ch,
+            http,
+            buf: String::new(),
+        }
+    }
+    async fn add(&mut self, line: &str) {
+        if self.buf.len() + 1 + line.len() > 1950 {
+            self.flush().await;
+        }
+        //      if !self.buf.is_empty() {}
+        self.buf.push_str(line);
+        self.buf.push('\n')
+    }
+    async fn flush(&mut self) {
+        if !self.buf.is_empty() {
+            if let Err(e) = self.ch.say(self.http, &self.buf).await {
+                println!("Failed to send message to channel {}: {:?}", self.ch, e);
+            }
+            self.buf.clear();
         }
     }
 }
