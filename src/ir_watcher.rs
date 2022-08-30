@@ -2,11 +2,11 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use tokio::{sync::mpsc::Sender, time::Instant};
 
-use crate::ir::{IrClient, RaceGuideEntry, Season};
+use crate::ir::{IrClient, RaceGuideEntry, Season, Series};
 
 #[derive(Debug)]
 pub enum RaceGuideEvent {
-    Seasons(Vec<Season>),
+    Seasons(Vec<SeriesSeason>),
     Announcements(Vec<(i64, String)>),
 }
 
@@ -38,11 +38,19 @@ async fn iracing_loop(
     let client = IrClient::new(&user, &password).await?;
     if series_state.is_empty() {
         let seasons = client.seasons().await?;
-        for season in &seasons {
-            let reg = SeriesReg::new(season.clone());
-            series_state.insert(reg.series_id(), reg);
+        let series = client.series().await?;
+        let mut series_by_id = HashMap::with_capacity(series.len());
+        for s in series {
+            series_by_id.insert(s.series_id, s);
         }
-        if let Err(err) = tx.send(RaceGuideEvent::Seasons(seasons)).await {
+        let mut series_seasons = Vec::with_capacity(series_by_id.len());
+        for season in seasons {
+            let ss = SeriesSeason::new(series_by_id.remove(&season.series_id).unwrap(), season);
+            let reg = SeriesReg::new(ss.clone());
+            series_state.insert(reg.series_id(), reg);
+            series_seasons.push(ss);
+        }
+        if let Err(err) = tx.send(RaceGuideEvent::Seasons(series_seasons)).await {
             println!("Error sending Seasons to channel {:?}", err);
         }
     }
@@ -76,24 +84,38 @@ async fn iracing_loop(
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SeriesSeason {
+    pub series: Series,
+    pub season: Season,
+}
+impl SeriesSeason {
+    fn new(series: Series, season: Season) -> Self {
+        SeriesSeason { series, season }
+    }
+    #[inline]
+    pub fn series_id(&self) -> i64 {
+        self.series.series_id
+    }
+}
 struct SeriesReg {
-    season: Season,
+    season: SeriesSeason,
     race_guide: Option<RaceGuideEntry>,
 }
 impl SeriesReg {
-    fn new(s: Season) -> Self {
+    fn new(season: SeriesSeason) -> Self {
         SeriesReg {
-            season: s,
+            season,
             race_guide: None,
         }
     }
     #[inline]
     fn series_id(&self) -> i64 {
-        self.season.series_id
+        self.season.season.series_id
     }
     #[inline]
     fn name(&self) -> &str {
-        &self.season.schedules[0].series_name.trim()
+        &self.season.series.series_name
     }
     fn update(&mut self, e: RaceGuideEntry) -> Option<String> {
         if self.race_guide.is_none() {

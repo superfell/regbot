@@ -88,13 +88,13 @@ impl IrClient {
         .await
     }
     pub async fn race_guide(&self) -> Result<RaceGuide, anyhow::Error> {
-        self.fetch("/season/race_guide").await
+        self.fetch("season/race_guide").await
     }
     pub async fn seasons(&self) -> Result<Vec<Season>, anyhow::Error> {
         self.fetch("series/seasons?include_series=false").await
     }
     pub async fn series(&self) -> Result<Vec<Series>, anyhow::Error> {
-        self.fetch("/series/get").await
+        self.fetch("series/get").await
     }
 }
 
@@ -161,11 +161,6 @@ pub struct Season {
     pub season_name: String,
     pub schedules: Vec<Schedule>,
 }
-impl Season {
-    pub fn series_name(&self) -> &str {
-        &self.schedules[0].series_name
-    }
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Schedule {
@@ -195,7 +190,7 @@ pub struct Series {
     pub min_starters: i64,
     pub oval_caution_type: i64,
     pub road_caution_type: i64,
-    pub search_filters: String,
+    pub search_filters: Option<String>,
     pub series_id: i64,
     pub series_name: String,
     pub series_short_name: String,

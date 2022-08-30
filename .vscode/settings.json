@@ -4,6 +4,8 @@
         "concatted",
         "IRPWD",
         "IRUSER",
+        "msger",
+        "regs",
         "threadpool",
         "upto"
     ]
