@@ -1,5 +1,8 @@
 use chrono::Utc;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+};
 use tokio::{sync::mpsc::Sender, time::Instant};
 
 use crate::ir::{IrClient, RaceGuideEntry, Season, Series};
@@ -7,7 +10,7 @@ use crate::ir::{IrClient, RaceGuideEntry, Season, Series};
 #[derive(Debug)]
 pub enum RaceGuideEvent {
     Seasons(HashMap<i64, SeasonInfo>),
-    Announcements(Vec<(i64, String)>),
+    Announcements(HashMap<i64, Announcement>),
 }
 
 pub async fn iracing_loop_task(user: String, password: String, mut tx: Sender<RaceGuideEvent>) {
@@ -56,29 +59,30 @@ async fn iracing_loop(
     }
     loop {
         let start = Instant::now();
-        println!("checking for race guide updates at {:?}", start);
+        println!("checking for race guide updates");
         let guide = client.race_guide().await?;
         // the guide contains race starts for upto 3 hours, so each series may appear more than once
         // so we need to keep track of which ones we've seen and only process the first one for each series.
         let mut seen = HashSet::new();
-        let mut announcements = Vec::new();
+        let mut announcements = HashMap::new();
         for e in guide.sessions {
             if seen.insert(e.series_id) {
-                let ann = series_state.get_mut(&e.series_id);
-                if let Some(sr) = ann {
+                if let Some(sr) = series_state.get_mut(&e.series_id) {
                     if let Some(msg) = sr.update(e) {
-                        announcements.push((sr.series_id(), msg));
+                        announcements.insert(sr.series_id(), msg);
                     }
                 }
                 continue;
             }
         }
-        match tx.send(RaceGuideEvent::Announcements(announcements)).await {
-            Err(err) => println!("Failed to send RaceGuideEvent to channel {:?}", err),
-            Ok(_) => println!(
-                "all done for this time, took {}ms",
-                (Instant::now() - start).as_millis()
-            ),
+        if !announcements.is_empty() {
+            match tx.send(RaceGuideEvent::Announcements(announcements)).await {
+                Err(err) => println!("Failed to send RaceGuideEvent to channel {:?}", err),
+                Ok(_) => println!(
+                    "all done for this time, took {}ms",
+                    (Instant::now() - start).as_millis()
+                ),
+            }
         }
         tokio::time::sleep_until(start + loop_interval).await;
     }
@@ -105,6 +109,56 @@ impl SeasonInfo {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum AnnouncementType {
+    RegOpen,
+    RegCount,
+    RegClosed,
+}
+
+#[derive(Debug, Clone)]
+pub struct Announcement {
+    pub series_name: String,
+    pub prev: RaceGuideEntry,
+    pub curr: RaceGuideEntry,
+    pub ann_type: AnnouncementType,
+}
+impl Announcement {
+    fn new(
+        series_name: String,
+        prev: RaceGuideEntry,
+        curr: RaceGuideEntry,
+        ann_type: AnnouncementType,
+    ) -> Self {
+        Announcement {
+            series_name,
+            prev,
+            curr,
+            ann_type,
+        }
+    }
+}
+impl Display for Announcement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ann_type {
+            AnnouncementType::RegOpen => write!(
+                f,
+                "{}: Registration open!, {} minutes til race time",
+                &self.series_name,
+                (self.curr.start_time - Utc::now()).num_minutes()
+            ),
+            AnnouncementType::RegCount => write!(
+                f,
+                "{}: {} registered. Session starts in {} minutes",
+                &self.series_name,
+                self.curr.entry_count,
+                (self.curr.start_time - Utc::now()).num_minutes(),
+            ),
+            AnnouncementType::RegClosed => write!(f, "{}: Registration closed.", &self.series_name),
+        }
+    }
+}
+
 struct SeriesReg {
     series: Series,
     season: Season,
@@ -122,45 +176,40 @@ impl SeriesReg {
     fn series_id(&self) -> i64 {
         self.series.series_id
     }
-    #[inline]
-    fn name(&self) -> &str {
-        &self.series.series_name
-    }
-    fn update(&mut self, e: RaceGuideEntry) -> Option<String> {
+    fn update(&mut self, e: RaceGuideEntry) -> Option<Announcement> {
         if self.race_guide.is_none() {
-            // if e.session_id.is_some() {
-            //     let msg = Some(format!(
-            //         "{}: Registration open!, {} minutes to race time",
-            //         self.name(),
-            //         (e.start_time - Utc::now()).num_minutes()
-            //     ));
-            //     self.race_guide = Some(e);
-            //     return msg;
-            // }
             self.race_guide = Some(e);
             return None;
         }
         // reg open
-        let prev = self.race_guide.as_ref().unwrap();
+        let prev = self.race_guide.take().unwrap();
         let ann = if prev.session_id.is_none() && e.session_id.is_some() {
-            Some(format!(
-                "{}: Registration open!, {} minutes to race time",
-                self.name(),
-                (e.start_time - Utc::now()).num_minutes()
+            Some(Announcement::new(
+                self.series.series_name.clone(),
+                prev,
+                e.clone(),
+                AnnouncementType::RegOpen,
             ))
+        // reg count changed
         } else if prev.session_id.is_some()
             && e.session_id.is_some()
             && prev.entry_count != e.entry_count
             && (prev.entry_count > 0 || e.entry_count > 0)
         {
-            Some(format!(
-                "{}: {} registered. Session starts in {} minutes",
-                self.name(),
-                e.entry_count,
-                (e.start_time - Utc::now()).num_minutes(),
+            Some(Announcement::new(
+                self.series.series_name.clone(),
+                prev,
+                e.clone(),
+                AnnouncementType::RegCount,
             ))
+        // reg closed
         } else if prev.session_id.is_some() && e.session_id.is_none() && prev.entry_count > 0 {
-            Some(format!("{}: Registration closed.", self.name()))
+            Some(Announcement::new(
+                self.series.series_name.clone(),
+                prev,
+                e.clone(),
+                AnnouncementType::RegClosed,
+            ))
         } else {
             None
         };

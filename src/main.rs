@@ -1,8 +1,5 @@
-use std::collections::HashMap;
-use std::env;
-use std::sync::Arc;
-use std::sync::Mutex;
-
+use ir_watcher::Announcement;
+use ir_watcher::AnnouncementType;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
 use serenity::async_trait;
 use serenity::http::Http;
@@ -17,6 +14,10 @@ use serenity::prelude::Context;
 use serenity::prelude::EventHandler;
 use serenity::prelude::GatewayIntents;
 use serenity::Client;
+use std::collections::HashMap;
+use std::env;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
 
@@ -33,6 +34,18 @@ struct Reg {
     max_reg: i64,
     open: bool,
     close: bool,
+}
+impl Reg {
+    fn wants(&self, ann: &Announcement) -> bool {
+        assert_eq!(self.series_id, ann.curr.series_id);
+        match ann.ann_type {
+            AnnouncementType::RegOpen => self.open,
+            AnnouncementType::RegClosed => self.close,
+            AnnouncementType::RegCount => {
+                ann.curr.entry_count >= self.min_reg && ann.curr.entry_count <= self.max_reg
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -289,19 +302,17 @@ async fn main() {
 async fn announce(
     http: impl AsRef<Http>,
     reg: HashMap<ChannelId, Vec<Reg>>,
-    msgs: Vec<(i64, String)>,
+    msgs: HashMap<i64, Announcement>,
 ) {
     println!("{} announcements, {} reg", msgs.len(), reg.len());
     // many reg may want the same series_id. and we can message a number of msgs to a single channel at once.
-    let mut msg_by_series_id = HashMap::with_capacity(msgs.len());
-    for (sid, msg) in msgs {
-        msg_by_series_id.insert(sid, msg);
-    }
     for (ch, regs) in reg {
         let mut msger = Messenger::new(ch, http.as_ref());
         for reg in &regs {
-            if let Some(msg) = msg_by_series_id.get(&reg.series_id) {
-                msger.add(msg).await;
+            if let Some(msg) = msgs.get(&reg.series_id) {
+                if reg.wants(msg) {
+                    msger.add(&msg.to_string()).await;
+                }
             }
         }
         msger.flush().await;
