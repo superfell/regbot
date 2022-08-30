@@ -6,7 +6,7 @@ use crate::ir::{IrClient, RaceGuideEntry, Season, Series};
 
 #[derive(Debug)]
 pub enum RaceGuideEvent {
-    Seasons(Vec<SeriesSeason>),
+    Seasons(HashMap<i64, SeasonInfo>),
     Announcements(Vec<(i64, String)>),
 }
 
@@ -43,14 +43,14 @@ async fn iracing_loop(
         for s in series {
             series_by_id.insert(s.series_id, s);
         }
-        let mut series_seasons = Vec::with_capacity(series_by_id.len());
+        let mut season_infos = HashMap::with_capacity(series_by_id.len());
         for season in seasons {
-            let ss = SeriesSeason::new(series_by_id.remove(&season.series_id).unwrap(), season);
-            let reg = SeriesReg::new(ss.clone());
+            let series = series_by_id.remove(&season.series_id).unwrap();
+            season_infos.insert(series.series_id, SeasonInfo::new(&series, &season));
+            let reg = SeriesReg::new(series, season);
             series_state.insert(reg.series_id(), reg);
-            series_seasons.push(ss);
         }
-        if let Err(err) = tx.send(RaceGuideEvent::Seasons(series_seasons)).await {
+        if let Err(err) = tx.send(RaceGuideEvent::Seasons(season_infos)).await {
             println!("Error sending Seasons to channel {:?}", err);
         }
     }
@@ -85,37 +85,46 @@ async fn iracing_loop(
 }
 
 #[derive(Debug, Clone)]
-pub struct SeriesSeason {
-    pub series: Series,
-    pub season: Season,
+pub struct SeasonInfo {
+    pub series_id: i64,
+    pub reg_official: i64,
+    pub reg_split: i64,
+    pub name: String,
+    pub lc_name: String,
 }
-impl SeriesSeason {
-    fn new(series: Series, season: Season) -> Self {
-        SeriesSeason { series, season }
-    }
-    #[inline]
-    pub fn series_id(&self) -> i64 {
-        self.series.series_id
+impl SeasonInfo {
+    pub fn new(series: &Series, season: &Season) -> Self {
+        let n = &series.series_name;
+        SeasonInfo {
+            series_id: series.series_id,
+            reg_official: series.min_starters,
+            reg_split: series.max_starters,
+            name: n.to_string(),
+            lc_name: n.to_lowercase(),
+        }
     }
 }
+
 struct SeriesReg {
-    season: SeriesSeason,
+    series: Series,
+    season: Season,
     race_guide: Option<RaceGuideEntry>,
 }
 impl SeriesReg {
-    fn new(season: SeriesSeason) -> Self {
+    fn new(series: Series, season: Season) -> Self {
         SeriesReg {
+            series,
             season,
             race_guide: None,
         }
     }
     #[inline]
     fn series_id(&self) -> i64 {
-        self.season.season.series_id
+        self.series.series_id
     }
     #[inline]
     fn name(&self) -> &str {
-        &self.season.series.series_name
+        &self.series.series_name
     }
     fn update(&mut self, e: RaceGuideEntry) -> Option<String> {
         if self.race_guide.is_none() {

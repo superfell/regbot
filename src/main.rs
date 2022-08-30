@@ -3,7 +3,7 @@ use std::env;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeriesSeason};
+use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
 use serenity::async_trait;
 use serenity::http::Http;
 use serenity::model::application::command::CommandOptionType;
@@ -22,27 +22,6 @@ use tokio::sync::mpsc::Receiver;
 
 mod ir;
 mod ir_watcher;
-
-#[derive(Clone)]
-struct SeasonInfo {
-    series_id: i64,
-    reg_official: i64,
-    reg_split: i64,
-    name: String,
-    lc_name: String,
-}
-impl SeasonInfo {
-    fn new(s: &SeriesSeason) -> Self {
-        let n = &s.series.series_name;
-        SeasonInfo {
-            series_id: s.series_id(),
-            reg_official: s.series.min_starters,
-            reg_split: s.series.max_starters,
-            name: n.to_string(),
-            lc_name: n.to_lowercase(),
-        }
-    }
-}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -91,12 +70,8 @@ impl Handler {
                         announce(&http, reg, msgs).await;
                     }
                     RaceGuideEvent::Seasons(s) => {
-                        let si = s
-                            .iter()
-                            .map(|s| (s.series_id(), SeasonInfo::new(s)))
-                            .collect();
                         let mut st = state.lock().expect("Unable to lock state");
-                        st.seasons = si;
+                        st.seasons = s;
                     }
                 }
             }
