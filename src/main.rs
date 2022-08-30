@@ -318,15 +318,15 @@ async fn announce(
 ) {
     println!("{} announcements, {} reg", msgs.len(), reg.len());
     // many reg may want the same series_id. and we can message a number of msgs to a single channel at once.
-    // so we want to group the reg by channel_id
+    let mut msg_by_series_id = HashMap::with_capacity(msgs.len());
+    for (sid, msg) in msgs {
+        msg_by_series_id.insert(sid, msg);
+    }
     for (ch, regs) in reg {
         let mut msger = Messenger::new(ch, http.as_ref());
-        for msg in &msgs {
-            for reg in &regs {
-                if msg.0 == reg.series_id {
-                    msger.add(&msg.1).await;
-                    break;
-                }
+        for reg in &regs {
+            if let Some(msg) = msg_by_series_id.get(&reg.series_id) {
+                msger.add(msg).await;
             }
         }
         msger.flush().await;
