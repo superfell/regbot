@@ -178,8 +178,11 @@ impl EventHandler for Handler {
                     let series = &st.seasons[&series_id];
                     let min_reg =
                         resolve_option_i64(&command.data.options, 1, series.reg_official / 2);
-                    let max_reg =
-                        resolve_option_i64(&command.data.options, 2, series.reg_split / 2);
+                    let max_reg = resolve_option_i64(
+                        &command.data.options,
+                        2,
+                        ((series.reg_split - series.reg_official) / 2) + series.reg_official,
+                    );
 
                     msg = format!("Okay, I will message this channel about registration for series {} when it reaches at least {} reg, and stop after reg reaches {}.", &series.name, min_reg,max_reg);
                     msg.push_str(match (open, close) {
