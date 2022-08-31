@@ -1,12 +1,14 @@
 {
-    "cSpell.words": [
-        "autocomp",
-        "concatted",
-        "IRPWD",
-        "IRUSER",
-        "msger",
-        "regs",
-        "threadpool",
-        "upto"
-    ]
+  "cSpell.words": [
+    "autocomp",
+    "concatted",
+    "datetime",
+    "IRPWD",
+    "IRUSER",
+    "msger",
+    "Regbot",
+    "regs",
+    "threadpool",
+    "upto"
+  ]
 }

@@ -19,9 +19,9 @@ impl Reg {
     pub fn wants(&self, ann: &Announcement) -> bool {
         assert_eq!(self.series_id, ann.curr.series_id);
         match ann.ann_type {
-            AnnouncementType::RegOpen => self.open,
-            AnnouncementType::RegClosed => self.close,
-            AnnouncementType::RegCount => {
+            AnnouncementType::Open => self.open,
+            AnnouncementType::Closed => self.close,
+            AnnouncementType::Count => {
                 ann.curr.entry_count >= self.min_reg && ann.curr.entry_count <= self.max_reg
             }
         }
@@ -34,7 +34,7 @@ pub struct Db {
 
 impl Db {
     pub fn new(file: &str) -> rusqlite::Result<Self> {
-        let mut con = Connection::open(file)?;
+        let con = Connection::open(file)?;
         con.execute(
             "CREATE TABLE IF NOT EXISTS reg(
                                 guild_id    integer, 
@@ -55,7 +55,7 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_series_id ON reg(series_id)",
             [],
         )?;
-        Ok(Db { con: con })
+        Ok(Db { con })
     }
     pub fn upsert_reg(
         &mut self,
@@ -99,7 +99,7 @@ impl Db {
             let g: Option<u64> = row.get("guild_id")?;
             let c: u64 = row.get("channel_id")?;
             Ok(Reg {
-                guild: g.map(|g| GuildId(g)),
+                guild: g.map(GuildId),
                 channel: ChannelId(c),
                 series_id: row.get("series_id")?,
                 min_reg: row.get("min_reg")?,
@@ -110,7 +110,7 @@ impl Db {
         })?;
         for row in rows {
             let r = row?;
-            res.entry(r.channel).or_insert_with(|| Vec::new()).push(r);
+            res.entry(r.channel).or_insert_with(Vec::new).push(r);
         }
         Ok(res)
     }

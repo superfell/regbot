@@ -38,7 +38,7 @@ async fn iracing_loop(
     tx: &mut Sender<RaceGuideEvent>,
 ) -> anyhow::Result<()> {
     let loop_interval = tokio::time::Duration::from_secs(60);
-    let client = IrClient::new(&user, &password).await?;
+    let client = IrClient::new(user, password).await?;
     if series_state.is_empty() {
         let seasons = client.seasons().await?;
         let series = client.series().await?;
@@ -111,9 +111,9 @@ impl SeasonInfo {
 
 #[derive(Debug, Clone)]
 pub enum AnnouncementType {
-    RegOpen,
-    RegCount,
-    RegClosed,
+    Open,
+    Count,
+    Closed,
 }
 
 #[derive(Debug, Clone)]
@@ -141,20 +141,20 @@ impl Announcement {
 impl Display for Announcement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.ann_type {
-            AnnouncementType::RegOpen => write!(
+            AnnouncementType::Open => write!(
                 f,
                 "{}: Registration open!, {} minutes til race time",
                 &self.series_name,
                 (self.curr.start_time - Utc::now()).num_minutes()
             ),
-            AnnouncementType::RegCount => write!(
+            AnnouncementType::Count => write!(
                 f,
                 "{}: {} registered. Session starts in {} minutes",
                 &self.series_name,
                 self.curr.entry_count,
                 (self.curr.start_time - Utc::now()).num_minutes(),
             ),
-            AnnouncementType::RegClosed => write!(f, "{}: Registration closed.", &self.series_name),
+            AnnouncementType::Closed => write!(f, "{}: Registration closed.", &self.series_name),
         }
     }
 }
@@ -188,7 +188,7 @@ impl SeriesReg {
                 self.series.series_name.clone(),
                 prev,
                 e.clone(),
-                AnnouncementType::RegOpen,
+                AnnouncementType::Open,
             ))
         // reg count changed
         } else if prev.session_id.is_some()
@@ -200,7 +200,7 @@ impl SeriesReg {
                 self.series.series_name.clone(),
                 prev,
                 e.clone(),
-                AnnouncementType::RegCount,
+                AnnouncementType::Count,
             ))
         // reg closed
         } else if prev.session_id.is_some() && e.session_id.is_none() && prev.entry_count > 0 {
@@ -208,7 +208,7 @@ impl SeriesReg {
                 self.series.series_name.clone(),
                 prev,
                 e.clone(),
-                AnnouncementType::RegClosed,
+                AnnouncementType::Closed,
             ))
         } else {
             None

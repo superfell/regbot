@@ -9,6 +9,7 @@ use serenity::model::application::interaction::{Interaction, InteractionResponse
 use serenity::model::gateway::Ready;
 use serenity::model::id::GuildId;
 use serenity::model::prelude::interaction::application_command::CommandDataOption;
+use serenity::model::prelude::interaction::MessageFlags;
 use serenity::model::prelude::ChannelId;
 use serenity::prelude::Context;
 use serenity::prelude::EventHandler;
@@ -66,7 +67,7 @@ impl Handler {
         }
     }
 }
-fn resolve_option_i64(opts: &Vec<CommandDataOption>, opt_idx: usize, def_val: i64) -> i64 {
+fn resolve_option_i64(opts: &[CommandDataOption], opt_idx: usize, def_val: i64) -> i64 {
     match opts.get(opt_idx) {
         None => def_val,
         Some(ov) => match ov.resolved {
@@ -78,7 +79,7 @@ fn resolve_option_i64(opts: &Vec<CommandDataOption>, opt_idx: usize, def_val: i6
         },
     }
 }
-fn resolve_option_bool(opts: &Vec<CommandDataOption>, opt_idx: usize, def_val: bool) -> bool {
+fn resolve_option_bool(opts: &[CommandDataOption], opt_idx: usize, def_val: bool) -> bool {
     match opts.get(opt_idx) {
         None => def_val,
         Some(ov) => match ov.resolved {
@@ -136,7 +137,7 @@ impl EventHandler for Handler {
                 let open = resolve_option_bool(&command.data.options, 3, false);
                 let close = resolve_option_bool(&command.data.options, 4, false);
                 let mut msg;
-                let mut dbr: rusqlite::Result<usize>;
+                let dbr: rusqlite::Result<usize>;
                 {
                     let mut st = self.state.lock().expect("couldn't lock state");
                     let series = &st.seasons[&series_id];
@@ -173,6 +174,7 @@ impl EventHandler for Handler {
                             response
                                 .kind(InteractionResponseType::ChannelMessageWithSource)
                                 .interaction_response_data(|message| {
+                                    message.flags(MessageFlags::EPHEMERAL);
                                     message.content(
                                         "Sorry I appear to have lost my notepad, try again later.",
                                     )
@@ -212,9 +214,6 @@ impl EventHandler for Handler {
 
         let _commands = GuildId::set_application_commands(&guild_id, &ctx.http, |commands| {
             commands
-                .create_application_command(|command| {
-                    command.name("ping").description("A ping command")
-                })
                 .create_application_command(|command| {
                     command
                         .name("reg")
