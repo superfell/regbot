@@ -1,0 +1,14 @@
+[Unit]
+Description=RegBot Discord bot for iRacing
+After=network.target
+
+[Service]
+ExecStart=regbot.sh
+Type=simple
+Restart=on-failure
+RestartSec=61s
+WorkingDirectory=/home/dietpi/regbot
+User=dietpi
+
+[Install]
+WantedBy=default.target
