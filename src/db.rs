@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Row};
 use serenity::model::prelude::{ChannelId, GuildId};
 use std::collections::{HashMap, HashSet};
 
@@ -91,26 +91,41 @@ impl Db {
         Ok(res)
     }
     pub fn regs(&self) -> rusqlite::Result<HashMap<ChannelId, Vec<Reg>>> {
-        //
-        let mut stmt = self.con.prepare("SELECT * FROM reg")?;
         let mut res = HashMap::new();
-        let rows = stmt.query_map([], |row| {
-            let g: Option<u64> = row.get("guild_id")?;
-            let c: u64 = row.get("channel_id")?;
-            Ok(Reg {
-                guild: g.map(GuildId),
-                channel: ChannelId(c),
-                series_id: row.get("series_id")?,
-                min_reg: row.get("min_reg")?,
-                max_reg: row.get("max_reg")?,
-                open: row.get("open")?,
-                close: row.get("close")?,
-            })
+        self.query_regs("", |r| {
+            res.entry(r.channel).or_insert_with(Vec::new).push(r)
         })?;
-        for row in rows {
-            let r = row?;
-            res.entry(r.channel).or_insert_with(Vec::new).push(r);
-        }
         Ok(res)
     }
+    pub fn channel_regs(&self, ch: ChannelId) -> rusqlite::Result<Vec<Reg>> {
+        let mut res = Vec::new();
+        let filter = format!("WHERE channel_id={}", ch.0);
+        self.query_regs(&filter, |r| res.push(r))?;
+        Ok(res)
+    }
+    fn query_regs<F>(&self, filter: &str, mut f: F) -> rusqlite::Result<()>
+    where
+        F: FnMut(Reg),
+    {
+        let sql = format!("SELECT * FROM reg {}", filter);
+        let mut stmt = self.con.prepare(&sql)?;
+        for row in stmt.query_map([], to_reg)? {
+            f(row?);
+        }
+        Ok(())
+    }
+}
+
+fn to_reg(row: &Row) -> rusqlite::Result<Reg> {
+    let g: Option<u64> = row.get("guild_id")?;
+    let c: u64 = row.get("channel_id")?;
+    Ok(Reg {
+        guild: g.map(GuildId),
+        channel: ChannelId(c),
+        series_id: row.get("series_id")?,
+        min_reg: row.get("min_reg")?,
+        max_reg: row.get("max_reg")?,
+        open: row.get("open")?,
+        close: row.get("close")?,
+    })
 }

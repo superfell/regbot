@@ -1,4 +1,4 @@
-use cmds::{ACommand, RegCommand};
+use cmds::{ACommand, RegCommand, ListCommand};
 use db::{Db, Reg};
 use ir_watcher::Announcement;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
@@ -74,6 +74,9 @@ impl Handler {
                 commands
             })
             .await;
+        if let Err(e) = _commands {
+            println!("Failed to install commands {:?}",e);
+        }
     }
 }
 
@@ -158,7 +161,8 @@ async fn main() {
     }));
     let handler = Handler {
         state: state.clone(),
-        commands: vec![Box::new(RegCommand::new(state.clone()))],
+        commands: vec![Box::new(RegCommand::new(state.clone())),
+                        Box::new(ListCommand::new(state.clone()))],
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
     handler.listen_for_race_guide(token.clone(), rx);
@@ -202,20 +206,20 @@ async fn announce(
     }
 }
 
-struct Messenger<'a> {
+pub struct Messenger<'a> {
     http: &'a Http,
     ch: ChannelId,
     buf: String,
 }
 impl<'a> Messenger<'a> {
-    fn new(ch: ChannelId, http: &'a Http) -> Self {
+    pub fn new(ch: ChannelId, http: &'a Http) -> Self {
         Messenger {
             ch,
             http,
             buf: String::new(),
         }
     }
-    async fn add(&mut self, line: &str) {
+    pub async fn add(&mut self, line: &str) {
         if self.buf.len() + 1 + line.len() > 1950 {
             self.flush().await;
         }
@@ -223,7 +227,7 @@ impl<'a> Messenger<'a> {
         self.buf.push_str(line);
         self.buf.push('\n')
     }
-    async fn flush(&mut self) {
+    pub async fn flush(&mut self) {
         if !self.buf.is_empty() {
             if let Err(e) = self.ch.say(self.http, &self.buf).await {
                 println!("Failed to send message to channel {}: {:?}", self.ch, e);
