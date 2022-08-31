@@ -2,7 +2,7 @@
 
 ## TODO
 
-- command to remove a watch
+- deal with series when user selects text, not one of the autocomplete options.
 - command for help
 
 ## DONE
@@ -12,3 +12,4 @@
 - what happens when install in another server?
 - restrict /reg to server admin? defined users?
 - what happens during uninstall?
+- command to remove a watch

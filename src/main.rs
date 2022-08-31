@@ -1,4 +1,4 @@
-use cmds::{ACommand, ListCommand, RegCommand, RemoveCommand};
+use cmds::{ACommand, HelpCommand, ListCommand, RegCommand, RemoveCommand};
 use db::{Db, Reg};
 use ir_watcher::Announcement;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
@@ -165,6 +165,7 @@ async fn main() {
             Box::new(RegCommand::new(state.clone())),
             Box::new(ListCommand::new(state.clone())),
             Box::new(RemoveCommand::new(state.clone())),
+            Box::new(HelpCommand),
         ],
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);

@@ -355,3 +355,37 @@ fn resolve_option_bool(opts: &[CommandDataOption], opt_name: &str) -> Option<boo
     }
     None
 }
+
+pub struct HelpCommand;
+
+const HELP_MSG:&str = "Hey there, I'm Reginald. While i sip my coffee I'll keep an eye on race registrations for you. Let me know what series you're interested in and I'll message a channel when I see some activity for that series. Use the /watch command to select a series.
+
+You can control how many race entries are needed before i say anything with the min_reg option. I can also stop yammering on about it once there's a critical mass registered, use the max_reg option. If you want to always know when race registration opens or closes, you can use the open and close options to turn that on.
+
+By default I'll start reporting registrations at 50% of official and stop if it reaches halfway between official and splitting.
+
+If you forget what you asked for, you can /watching to find out. You can also /nomore if you don't care about a series anymore.";
+
+#[async_trait]
+impl ACommand for HelpCommand {
+    fn name(&self) -> &str {
+        "help"
+    }
+    fn create(&self, commands: &mut CreateApplicationCommands) {
+        commands.create_application_command(|command| {
+            command
+                .name(self.name())
+                .description("Ask Reg what his deal is.")
+        });
+    }
+    async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
+        if let Err(e) = command
+            .create_interaction_response(&ctx.http, |r| {
+                r.interaction_response_data(|d| d.content(HELP_MSG))
+            })
+            .await
+        {
+            println!("Failed to respond to /{}: {}", self.name(), e);
+        }
+    }
+}
