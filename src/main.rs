@@ -1,5 +1,5 @@
+use db::{Db, Reg};
 use ir_watcher::Announcement;
-use ir_watcher::AnnouncementType;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
 use serenity::async_trait;
 use serenity::http::Http;
@@ -21,40 +21,15 @@ use std::sync::Mutex;
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
 
+mod db;
 mod ir;
 mod ir_watcher;
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-struct Reg {
-    guild: Option<GuildId>,
-    channel: ChannelId,
-    series_id: i64,
-    min_reg: i64,
-    max_reg: i64,
-    open: bool,
-    close: bool,
-}
-impl Reg {
-    fn wants(&self, ann: &Announcement) -> bool {
-        assert_eq!(self.series_id, ann.curr.series_id);
-        match ann.ann_type {
-            AnnouncementType::RegOpen => self.open,
-            AnnouncementType::RegClosed => self.close,
-            AnnouncementType::RegCount => {
-                ann.curr.entry_count >= self.min_reg && ann.curr.entry_count <= self.max_reg
-            }
-        }
-    }
-}
-
-#[derive(Default)]
 struct HandlerState {
     seasons: HashMap<i64, SeasonInfo>,
-    reg: HashMap<ChannelId, Vec<Reg>>,
+    db: Db,
 }
 
-#[derive(Default)]
 struct Handler {
     state: Arc<Mutex<HandlerState>>,
 }
@@ -78,7 +53,7 @@ impl Handler {
                         let reg;
                         {
                             let st = state.lock().expect("Unable to lock state");
-                            reg = st.reg.clone();
+                            reg = st.db.regs().expect("query failed");
                         }
                         announce(&http, reg, msgs).await;
                     }
@@ -109,7 +84,7 @@ fn resolve_option_bool(opts: &Vec<CommandDataOption>, opt_idx: usize, def_val: b
         Some(ov) => match ov.resolved {
             Some(CommandDataOptionValue::Boolean(i)) => i,
             _ => {
-                println!("unexpected value {:?}", ov);
+                println!("unexpected bool value {:?}", ov.resolved);
                 def_val
             }
         },
@@ -161,6 +136,7 @@ impl EventHandler for Handler {
                 let open = resolve_option_bool(&command.data.options, 3, false);
                 let close = resolve_option_bool(&command.data.options, 4, false);
                 let mut msg;
+                let mut dbr: rusqlite::Result<usize>;
                 {
                     let mut st = self.state.lock().expect("couldn't lock state");
                     let series = &st.seasons[&series_id];
@@ -179,20 +155,35 @@ impl EventHandler for Handler {
                         (false, true) => " I'll also say when registration closes.",
                         (false, false) => "",
                     });
-                    let reg = Reg {
-                        guild: command.guild_id,
-                        channel: command.channel_id,
+                    dbr = st.db.upsert_reg(
+                        command.guild_id,
+                        command.channel_id,
                         series_id,
                         min_reg,
                         max_reg,
                         open,
                         close,
-                    };
-                    st.reg
-                        .entry(reg.channel)
-                        .or_insert_with(|| Vec::new())
-                        .push(reg);
+                        &command.user.name,
+                    );
                 }
+                if let Err(e) = dbr {
+                    println!("db failed to upsert reg {:?}", e);
+                    if let Err(why) = command
+                        .create_interaction_response(&ctx.http, |response| {
+                            response
+                                .kind(InteractionResponseType::ChannelMessageWithSource)
+                                .interaction_response_data(|message| {
+                                    message.content(
+                                        "Sorry I appear to have lost my notepad, try again later.",
+                                    )
+                                })
+                        })
+                        .await
+                    {
+                        println!("Cannot respond to slash command: {}", why);
+                    }
+                }
+
                 if let Err(why) = command
                     .create_interaction_response(&ctx.http, |response| {
                         response
@@ -282,7 +273,18 @@ async fn main() {
 
     // Build our client.
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
-    let handler = Handler::default();
+    let db = Db::new("regbot.db");
+    if let Err(e) = db {
+        println!("Failed to open db {:?}", e);
+        return;
+    }
+
+    let handler = Handler {
+        state: Arc::new(Mutex::new(HandlerState {
+            seasons: HashMap::new(),
+            db: db.unwrap(),
+        })),
+    };
     handler.listen_for_race_guide(token.clone(), rx);
     let mut client = Client::builder(token, GatewayIntents::non_privileged())
         .event_handler(handler)
@@ -304,7 +306,11 @@ async fn announce(
     reg: HashMap<ChannelId, Vec<Reg>>,
     msgs: HashMap<i64, Announcement>,
 ) {
-    println!("{} announcements, {} reg", msgs.len(), reg.len());
+    println!(
+        "{} announcements, {} channels with watches",
+        msgs.len(),
+        reg.len()
+    );
     // many reg may want the same series_id. and we can message a number of msgs to a single channel at once.
     for (ch, regs) in reg {
         let mut msger = Messenger::new(ch, http.as_ref());
