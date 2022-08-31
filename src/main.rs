@@ -7,10 +7,9 @@ use serenity::model::application::command::CommandOptionType;
 use serenity::model::application::interaction::application_command::CommandDataOptionValue;
 use serenity::model::application::interaction::{Interaction, InteractionResponseType};
 use serenity::model::gateway::Ready;
-use serenity::model::id::GuildId;
 use serenity::model::prelude::interaction::application_command::CommandDataOption;
 use serenity::model::prelude::interaction::MessageFlags;
-use serenity::model::prelude::ChannelId;
+use serenity::model::prelude::{ChannelId, Guild, GuildChannel, GuildId, UnavailableGuild};
 use serenity::prelude::Context;
 use serenity::prelude::EventHandler;
 use serenity::prelude::GatewayIntents;
@@ -66,30 +65,69 @@ impl Handler {
             }
         }
     }
-}
-fn resolve_option_i64(opts: &[CommandDataOption], opt_idx: usize, def_val: i64) -> i64 {
-    match opts.get(opt_idx) {
-        None => def_val,
-        Some(ov) => match ov.resolved {
-            Some(CommandDataOptionValue::Integer(i)) => i,
-            _ => {
-                println!("unexpected value {:?}", ov);
-                def_val
-            }
-        },
+    async fn install_commands(&self, ctx: &Context, guild_id: GuildId) {
+        println!("Installing commands for guild {}", guild_id);
+        let _commands = guild_id.set_application_commands( &ctx.http, |commands| {
+            commands
+                .create_application_command(|command| {
+                    command
+                        .name("reg")
+                        .description("Ask Reg to announce race registration info for a particular series")
+                        .create_option(|option| {
+                            option
+                                .name("series")
+                                .description("The series to announce")
+                                .set_autocomplete(true)
+                                .kind(CommandOptionType::String)
+                                .required(true)
+                        })
+                        .create_option(|option| {
+                            option
+                                .name("min_reg")
+                                .description("The minimum number of registered race entries before making an announcement. Defaults to 1/2 of the number required to go official")
+                                .kind(CommandOptionType::Integer)
+                                .min_int_value(0).max_int_value(1000)
+                                .required(false)
+                        }).create_option(|option| {
+                            option.name("max_reg").description("Stop making announcements after this many people are registered. Defaults to 1/2 way between official and splitting").kind(CommandOptionType::Integer).required(false).min_int_value(1).max_int_value(1000)
+                        }).create_option(|option| {
+                            option.name("open").description("Always announce when registration opens").kind(CommandOptionType::Boolean).required(false)
+                        }).create_option(|option| {
+                            option.name("close").description("Always announce when registration closes").kind(CommandOptionType::Boolean).required(false)
+                        })
+                })
+        })
+        .await;
     }
 }
-fn resolve_option_bool(opts: &[CommandDataOption], opt_idx: usize, def_val: bool) -> bool {
-    match opts.get(opt_idx) {
-        None => def_val,
-        Some(ov) => match ov.resolved {
-            Some(CommandDataOptionValue::Boolean(i)) => i,
-            _ => {
-                println!("unexpected bool value {:?}", ov.resolved);
-                def_val
-            }
-        },
+
+fn resolve_option_i64(opts: &[CommandDataOption], opt_name: &str) -> Option<i64> {
+    for o in opts {
+        if o.name == opt_name {
+            return match o.resolved {
+                Some(CommandDataOptionValue::Integer(i)) => Some(i),
+                _ => {
+                    println!("unexpected int value for {} of {:?}", opt_name, o.resolved);
+                    None
+                }
+            };
+        }
     }
+    None
+}
+fn resolve_option_bool(opts: &[CommandDataOption], opt_name: &str) -> Option<bool> {
+    for o in opts {
+        if o.name == opt_name {
+            return match o.resolved {
+                Some(CommandDataOptionValue::Boolean(i)) => Some(i),
+                _ => {
+                    println!("unexpected bool value for {} of {:?}", opt_name, o.resolved);
+                    None
+                }
+            };
+        }
+    }
+    None
 }
 #[async_trait]
 impl EventHandler for Handler {
@@ -134,18 +172,17 @@ impl EventHandler for Handler {
                 }
                 .expect("Failed to parse series_id");
 
-                let open = resolve_option_bool(&command.data.options, 3, false);
-                let close = resolve_option_bool(&command.data.options, 4, false);
+                let open = resolve_option_bool(&command.data.options, "open").unwrap_or(false);
+                let close = resolve_option_bool(&command.data.options, "close").unwrap_or(false);
+                let maybe_min_reg = resolve_option_i64(&command.data.options, "min_reg");
+                let maybe_max_reg = resolve_option_i64(&command.data.options, "max_reg");
                 let mut msg;
                 let dbr: rusqlite::Result<usize>;
                 {
                     let mut st = self.state.lock().expect("couldn't lock state");
                     let series = &st.seasons[&series_id];
-                    let min_reg =
-                        resolve_option_i64(&command.data.options, 1, series.reg_official / 2);
-                    let max_reg = resolve_option_i64(
-                        &command.data.options,
-                        2,
+                    let min_reg = maybe_min_reg.unwrap_or(series.reg_official / 2);
+                    let max_reg = maybe_max_reg.unwrap_or(
                         ((series.reg_split - series.reg_official) / 2) + series.reg_official,
                     );
 
@@ -201,67 +238,46 @@ impl EventHandler for Handler {
             }
         }
     }
+    async fn guild_delete(
+        &self,
+        _ctx: Context,
+        incomplete: UnavailableGuild,
+        _full: Option<Guild>,
+    ) {
+        // delete any reg for this guild if the unavailable flag is false.
+        println!(
+            "guild delete guild_id:{} / incomplete:{}",
+            incomplete.id, incomplete.unavailable
+        );
+        if !incomplete.unavailable {
+            let mut st = self.state.lock().expect("Unable to locks state");
+            if let Err(e) = st.db.delete_guild(incomplete.id) {
+                println!("Failed to delete guild {} :{:?}", incomplete.id, e);
+            }
+        }
+    }
+    async fn channel_delete(&self, _ctx: Context, _channel: &GuildChannel) {
+        println!(
+            "channel delete guild {} channel{}",
+            _channel.guild_id, _channel.id
+        );
+        let mut st = self.state.lock().expect("Unable to lock state");
+        if let Err(e) = st.db.delete_channel(_channel.id) {
+            println!(
+                "Failed to delete reg entries for channel id {} {:?}",
+                _channel.id, e
+            );
+        }
+    }
+    async fn guild_create(&self, ctx: Context, guild: Guild, _is_new: bool) {
+        // create commands in guild
+        println!("guild create {}/{}", guild.id, _is_new);
+        self.install_commands(&ctx, guild.id).await;
+    }
 
-    async fn ready(&self, ctx: Context, ready: Ready) {
+    async fn ready(&self, _ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
         println!("{:?}", ready.guilds);
-
-        let guild_id = ready.guilds[0].id;
-        // let guild_id = GuildId(
-        //     env::var("GUILD_ID")
-        //         .expect("Expected GUILD_ID in environment")
-        //         .parse()
-        //         .expect("GUILD_ID must be an integer"),
-        // );
-
-        let _commands = GuildId::set_application_commands(&guild_id, &ctx.http, |commands| {
-            commands
-                .create_application_command(|command| {
-                    command
-                        .name("reg")
-                        .description("Ask Reg to announce registration info for a particular series")
-                        .create_option(|option| {
-                            option
-                                .name("series")
-                                .description("The series to announce")
-                                .set_autocomplete(true)
-                                .kind(CommandOptionType::String)
-                                .required(true)
-                        })
-                        .create_option(|option| {
-                            option
-                                .name("min_reg")
-                                .description("The minimum number of registered race entries before making an announcement")
-                                .kind(CommandOptionType::Integer)
-                                .min_int_value(0).max_int_value(1000)
-                                .required(false)
-                        }).create_option(|option| {
-                            option.name("max_reg").description("Stop making announcements after this many people are registered").kind(CommandOptionType::Integer).required(false).min_int_value(1).max_int_value(1000)
-                        }).create_option(|option| {
-                            option.name("open").description("Announce when registration opens").kind(CommandOptionType::Boolean).required(false)
-                        }).create_option(|option| {
-                            option.name("close").description("Announce when registration closes").kind(CommandOptionType::Boolean).required(false)
-                        })
-                })
-        })
-        .await;
-
-        // println!(
-        //     "I now have the following guild slash commands: {:#?}",
-        //     commands
-        // );
-
-        // let guild_command = Command::create_global_application_command(&ctx.http, |command| {
-        //     command
-        //         .name("wonderful_command")
-        //         .description("An amazing command")
-        // })
-        // .await;
-
-        // println!(
-        //     "I created the following global slash command: {:#?}",
-        //     guild_command
-        // );
     }
 }
 
@@ -273,7 +289,6 @@ async fn main() {
     let ir_pwd = env::var("IRPWD").expect("Expected an iRacing password in the environment");
 
     // Build our client.
-    let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
     let db = Db::new("regbot.db");
     if let Err(e) = db {
         println!("Failed to open db {:?}", e);
@@ -286,13 +301,15 @@ async fn main() {
             db: db.unwrap(),
         })),
     };
+    let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
     handler.listen_for_race_guide(token.clone(), rx);
+    spawn(iracing_loop_task(ir_user, ir_pwd, tx));
+
     let mut client = Client::builder(token, GatewayIntents::non_privileged())
         .event_handler(handler)
         .await
         .expect("Error creating client");
 
-    spawn(iracing_loop_task(ir_user, ir_pwd, tx));
     // Finally, start a single shard, and start listening to events.
     //
     // Shards will automatically attempt to reconnect, and will perform

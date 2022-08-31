@@ -73,6 +73,14 @@ impl Db {
             params![channel_id.0, series_id],
         )
     }
+    pub fn delete_channel(&mut self, channel_id: ChannelId) -> rusqlite::Result<usize> {
+        self.con
+            .execute("DELETE FROM reg WHERE channel_id=?", params![channel_id.0])
+    }
+    pub fn delete_guild(&mut self, guild_id: GuildId) -> rusqlite::Result<usize> {
+        self.con
+            .execute("DELETE FROM reg WHERE guild_id=?", params![guild_id.0])
+    }
     pub fn series_ids(&self) -> rusqlite::Result<HashSet<i64>> {
         let mut stmt = self.con.prepare("SELECT distinct series_id FROM reg")?;
         let mut res = HashSet::new();
