@@ -176,6 +176,25 @@ impl ACommand for RegCommand {
         }
     }
 }
+
+pub struct ListCommand {
+    state: Arc<Mutex<HandlerState>>,
+}
+impl ListCommand {
+    pub fn new(state: Arc<Mutex<HandlerState>>) -> Self {
+        Self { state }
+    }
+}
+#[async_trait]
+impl ACommand for ListCommand {
+    fn name(&self) -> &str {
+        "watching"
+    }
+    async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
+        //
+    }
+}
+
 fn resolve_option_i64(opts: &[CommandDataOption], opt_name: &str) -> Option<i64> {
     for o in opts {
         if o.name == opt_name {
