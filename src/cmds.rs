@@ -17,7 +17,7 @@ use serenity::{
 use std::sync::{Arc, Mutex};
 
 use crate::db::Reg;
-use crate::{HandlerState};
+use crate::HandlerState;
 
 #[async_trait]
 pub trait ACommand: Send + Sync {
@@ -41,7 +41,7 @@ impl RegCommand {
 #[async_trait]
 impl ACommand for RegCommand {
     fn name(&self) -> &str {
-        "reg"
+        "watch"
     }
     fn create(&self, commands: &mut CreateApplicationCommands) {
         commands
@@ -113,11 +113,11 @@ impl ACommand for RegCommand {
         }
         .expect("Failed to parse series_id");
 
+        let msg: String;
         let open = resolve_option_bool(&command.data.options, "open").unwrap_or(false);
         let close = resolve_option_bool(&command.data.options, "close").unwrap_or(false);
         let maybe_min_reg = resolve_option_i64(&command.data.options, "min_reg");
         let maybe_max_reg = resolve_option_i64(&command.data.options, "max_reg");
-        let mut msg;
         let dbr: rusqlite::Result<usize>;
         {
             let mut st = self.state.lock().expect("couldn't lock state");
@@ -126,25 +126,20 @@ impl ACommand for RegCommand {
             let max_reg = maybe_max_reg
                 .unwrap_or(((series.reg_split - series.reg_official) / 2) + series.reg_official);
 
-            msg = format!("Okay, I will message this channel about registration for series {} when it reaches at least {} reg, and stop after reg reaches {}.", &series.name, min_reg,max_reg);
-            msg.push_str(match (open, close) {
-                (true, true) => " I'll also say when registration opens and closes.",
-                (true, false) => " I'll also say when registration opens.",
-                (false, true) => " I'll also say when registration closes.",
-                (false, false) => "",
-            });
-            dbr = st.db.upsert_reg(
-                &Reg {
-                    guild: command.guild_id,
-                    channel: command.channel_id,
-                    series_id,
-                    min_reg,
-                    max_reg,
-                    open,
-                    close,
-                },
-                &command.user.name,
+            let reg = Reg {
+                guild: command.guild_id,
+                channel: command.channel_id,
+                series_id,
+                min_reg,
+                max_reg,
+                open,
+                close,
+            };
+            msg = format!(
+                "Okay, I will message this channel about race registrations for {}",
+                reg.describe(&series.name)
             );
+            dbr = st.db.upsert_reg(&reg, &command.user.name);
         }
         if let Err(e) = dbr {
             println!("db failed to upsert reg {:?}", e);
@@ -199,12 +194,15 @@ impl ACommand for ListCommand {
     }
     async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
         let regs: rusqlite::Result<Vec<Reg>>;
-        let mut series:Vec<String> = Vec::new();
+        let mut series: Vec<String> = Vec::new();
         {
             let st = self.state.lock().expect("Unable to lock state");
             regs = st.db.channel_regs(command.channel_id);
             if let Ok(r) = &regs {
-                series = r.iter().map(|x|st.seasons[&x.series_id].name.clone()).collect();
+                series = r
+                    .iter()
+                    .map(|x| st.seasons[&x.series_id].name.clone())
+                    .collect();
             }
         }
         let mut msgs = Vec::new();
@@ -220,17 +218,18 @@ impl ACommand for ListCommand {
                     msgs.push("No registration announcements for this channel.".to_string());
                 } else {
                     msgs.push("Will post about race registrations for:".to_string());
-                    for (idx,x) in r.iter().enumerate() {
-                        msgs.push(format!("{}", series[idx]));
+                    for (idx, x) in r.iter().enumerate() {
+                        msgs.push(x.describe(&series[idx]));
                     }
                 }
             }
         };
-        if let Err(e) = command.create_interaction_response(&ctx.http, |r| {
-            r.interaction_response_data(|d| {
-                d.content(msgs.join("\n"))
+        if let Err(e) = command
+            .create_interaction_response(&ctx.http, |r| {
+                r.interaction_response_data(|d| d.content(msgs.join("\n")))
             })
-        }).await {
+            .await
+        {
             println!("Failed to respond to /{}: {}", self.name(), e);
         }
     }

@@ -1,8 +1,8 @@
+use crate::ir_watcher::{Announcement, AnnouncementType};
 use rusqlite::{params, Connection, Row};
 use serenity::model::prelude::{ChannelId, GuildId};
 use std::collections::{HashMap, HashSet};
-
-use crate::ir_watcher::{Announcement, AnnouncementType};
+use std::fmt::Write;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -25,6 +25,22 @@ impl Reg {
                 ann.curr.entry_count >= self.min_reg && ann.curr.entry_count <= self.max_reg
             }
         }
+    }
+    pub fn describe(&self, series_name: &str) -> String {
+        let mut x = String::with_capacity(series_name.len() * 2);
+        write!(
+            &mut x,
+            "{} between {} and {} entries.",
+            series_name, self.min_reg, self.max_reg
+        )
+        .expect("Failed to format string");
+        x.push_str(match (self.open, self.close) {
+            (true, true) => " I'll also say when registration opens and closes.",
+            (true, false) => " I'll also say when registration opens.",
+            (false, true) => " I'll also say when registration closes.",
+            (false, false) => "",
+        });
+        x
     }
 }
 

@@ -1,4 +1,4 @@
-use cmds::{ACommand, RegCommand, ListCommand};
+use cmds::{ACommand, ListCommand, RegCommand};
 use db::{Db, Reg};
 use ir_watcher::Announcement;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
@@ -75,7 +75,7 @@ impl Handler {
             })
             .await;
         if let Err(e) = _commands {
-            println!("Failed to install commands {:?}",e);
+            println!("Failed to install commands {:?}", e);
         }
     }
 }
@@ -161,8 +161,10 @@ async fn main() {
     }));
     let handler = Handler {
         state: state.clone(),
-        commands: vec![Box::new(RegCommand::new(state.clone())),
-                        Box::new(ListCommand::new(state.clone()))],
+        commands: vec![
+            Box::new(RegCommand::new(state.clone())),
+            Box::new(ListCommand::new(state.clone())),
+        ],
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
     handler.listen_for_race_guide(token.clone(), rx);
