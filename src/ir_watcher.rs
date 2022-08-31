@@ -37,7 +37,7 @@ async fn iracing_loop(
     password: &str,
     tx: &mut Sender<RaceGuideEvent>,
 ) -> anyhow::Result<()> {
-    let loop_interval = tokio::time::Duration::from_secs(60);
+    let loop_interval = tokio::time::Duration::from_secs(61);
     let client = IrClient::new(user, password).await?;
     if series_state.is_empty() {
         let seasons = client.seasons().await?;

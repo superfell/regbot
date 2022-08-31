@@ -63,6 +63,7 @@ impl IrClient {
             ));
         }
         let lnk: Link = res.json().await?;
+        println!("Expiry of response is {:?}", lnk.expires);
         let req = self.client.get(&lnk.link);
         match req.send().await?.json().await {
             Ok(r) => Ok(r),
@@ -103,6 +104,7 @@ impl IrClient {
 #[derive(Serialize, Deserialize, Debug)]
 struct Link {
     pub link: String,
+    pub expires: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]

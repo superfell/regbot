@@ -1,9 +1,7 @@
 # Regbot
 
 ## TODO
-
-- deal with series when user selects text, not one of the autocomplete options.
-- command for help
+- look at race guide expiry from ir
 
 ## DONE
 - fix issue with arg order handling
@@ -13,3 +11,6 @@
 - restrict /reg to server admin? defined users?
 - what happens during uninstall?
 - command to remove a watch
+- deal with series when user selects text, not one of the autocomplete options.
+- command for help
+
