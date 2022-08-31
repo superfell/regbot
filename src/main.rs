@@ -1,14 +1,11 @@
+use cmds::{ACommand, RegCommand};
 use db::{Db, Reg};
 use ir_watcher::Announcement;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
 use serenity::async_trait;
 use serenity::http::Http;
-use serenity::model::application::command::CommandOptionType;
-use serenity::model::application::interaction::application_command::CommandDataOptionValue;
-use serenity::model::application::interaction::{Interaction, InteractionResponseType};
+use serenity::model::application::interaction::Interaction;
 use serenity::model::gateway::Ready;
-use serenity::model::prelude::interaction::application_command::CommandDataOption;
-use serenity::model::prelude::interaction::MessageFlags;
 use serenity::model::prelude::{ChannelId, Guild, GuildChannel, GuildId, UnavailableGuild};
 use serenity::prelude::Context;
 use serenity::prelude::EventHandler;
@@ -21,17 +18,19 @@ use std::sync::Mutex;
 use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
 
+mod cmds;
 mod db;
 mod ir;
 mod ir_watcher;
 
-struct HandlerState {
+pub struct HandlerState {
     seasons: HashMap<i64, SeasonInfo>,
     db: Db,
 }
 
 struct Handler {
     state: Arc<Mutex<HandlerState>>,
+    commands: Vec<Box<dyn ACommand>>,
 }
 
 impl Handler {
@@ -67,173 +66,32 @@ impl Handler {
     }
     async fn install_commands(&self, ctx: &Context, guild_id: GuildId) {
         println!("Installing commands for guild {}", guild_id);
-        let _commands = guild_id.set_application_commands( &ctx.http, |commands| {
-            commands
-                .create_application_command(|command| {
-                    command
-                        .name("reg")
-                        .description("Ask Reg to announce race registration info for a particular series")
-                        .create_option(|option| {
-                            option
-                                .name("series")
-                                .description("The series to announce")
-                                .set_autocomplete(true)
-                                .kind(CommandOptionType::String)
-                                .required(true)
-                        })
-                        .create_option(|option| {
-                            option
-                                .name("min_reg")
-                                .description("The minimum number of registered race entries before making an announcement. Defaults to 1/2 of the number required to go official")
-                                .kind(CommandOptionType::Integer)
-                                .min_int_value(0).max_int_value(1000)
-                                .required(false)
-                        }).create_option(|option| {
-                            option.name("max_reg").description("Stop making announcements after this many people are registered. Defaults to 1/2 way between official and splitting").kind(CommandOptionType::Integer).required(false).min_int_value(1).max_int_value(1000)
-                        }).create_option(|option| {
-                            option.name("open").description("Always announce when registration opens").kind(CommandOptionType::Boolean).required(false)
-                        }).create_option(|option| {
-                            option.name("close").description("Always announce when registration closes").kind(CommandOptionType::Boolean).required(false)
-                        })
-                })
-        })
-        .await;
+        let _commands = guild_id
+            .set_application_commands(&ctx.http, |commands| {
+                for c in &self.commands {
+                    c.create(commands);
+                }
+                commands
+            })
+            .await;
     }
 }
 
-fn resolve_option_i64(opts: &[CommandDataOption], opt_name: &str) -> Option<i64> {
-    for o in opts {
-        if o.name == opt_name {
-            return match o.resolved {
-                Some(CommandDataOptionValue::Integer(i)) => Some(i),
-                _ => {
-                    println!("unexpected int value for {} of {:?}", opt_name, o.resolved);
-                    None
-                }
-            };
-        }
-    }
-    None
-}
-fn resolve_option_bool(opts: &[CommandDataOption], opt_name: &str) -> Option<bool> {
-    for o in opts {
-        if o.name == opt_name {
-            return match o.resolved {
-                Some(CommandDataOptionValue::Boolean(i)) => Some(i),
-                _ => {
-                    println!("unexpected bool value for {} of {:?}", opt_name, o.resolved);
-                    None
-                }
-            };
-        }
-    }
-    None
-}
 #[async_trait]
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Autocomplete(autocomp) = interaction {
-            if autocomp.data.name == "reg" {
-                for opt in &autocomp.data.options {
-                    if opt.focused && opt.name == "series" {
-                        if let Err(e) = autocomp
-                            .create_autocomplete_response(&ctx.http, |response| {
-                                let search_txt = match &autocomp.data.options[0].value {
-                                    Some(serde_json::Value::String(s)) => s,
-                                    _ => "",
-                                };
-                                let mut count = 0;
-                                let lc_txt = search_txt.to_lowercase();
-                                let state = self.state.lock().expect("unable to lock state");
-                                for season in state.seasons.values() {
-                                    if season.lc_name.contains(&lc_txt) {
-                                        response.add_string_choice(&season.name, season.series_id);
-                                        count += 1;
-                                        if count == 25 {
-                                            break;
-                                        }
-                                    }
-                                }
-                                response
-                            })
-                            .await
-                        {
-                            println!("Failed to send autocomp response {:?}", e);
-                        }
-                    }
+            for c in &self.commands {
+                if autocomp.data.name == c.name() {
+                    c.autocomplete(ctx, autocomp).await;
+                    break;
                 }
             }
         } else if let Interaction::ApplicationCommand(command) = interaction {
-            if command.data.name == "reg" {
-                let series_id = match command.data.options[0].resolved.as_ref().unwrap() {
-                    CommandDataOptionValue::String(x) => x.parse(),
-                    CommandDataOptionValue::Integer(x) => Ok(*x),
-                    _ => Ok(414),
-                }
-                .expect("Failed to parse series_id");
-
-                let open = resolve_option_bool(&command.data.options, "open").unwrap_or(false);
-                let close = resolve_option_bool(&command.data.options, "close").unwrap_or(false);
-                let maybe_min_reg = resolve_option_i64(&command.data.options, "min_reg");
-                let maybe_max_reg = resolve_option_i64(&command.data.options, "max_reg");
-                let mut msg;
-                let dbr: rusqlite::Result<usize>;
-                {
-                    let mut st = self.state.lock().expect("couldn't lock state");
-                    let series = &st.seasons[&series_id];
-                    let min_reg = maybe_min_reg.unwrap_or(series.reg_official / 2);
-                    let max_reg = maybe_max_reg.unwrap_or(
-                        ((series.reg_split - series.reg_official) / 2) + series.reg_official,
-                    );
-
-                    msg = format!("Okay, I will message this channel about registration for series {} when it reaches at least {} reg, and stop after reg reaches {}.", &series.name, min_reg,max_reg);
-                    msg.push_str(match (open, close) {
-                        (true, true) => " I'll also say when registration opens and closes.",
-                        (true, false) => " I'll also say when registration opens.",
-                        (false, true) => " I'll also say when registration closes.",
-                        (false, false) => "",
-                    });
-                    dbr = st.db.upsert_reg(
-                        &Reg {
-                            guild: command.guild_id,
-                            channel: command.channel_id,
-                            series_id,
-                            min_reg,
-                            max_reg,
-                            open,
-                            close,
-                        },
-                        &command.user.name,
-                    );
-                }
-                if let Err(e) = dbr {
-                    println!("db failed to upsert reg {:?}", e);
-                    if let Err(why) = command
-                        .create_interaction_response(&ctx.http, |response| {
-                            response
-                                .kind(InteractionResponseType::ChannelMessageWithSource)
-                                .interaction_response_data(|message| {
-                                    message.flags(MessageFlags::EPHEMERAL);
-                                    message.content(
-                                        "Sorry I appear to have lost my notepad, try again later.",
-                                    )
-                                })
-                        })
-                        .await
-                    {
-                        println!("Cannot respond to slash command: {}", why);
-                    }
-                }
-
-                if let Err(why) = command
-                    .create_interaction_response(&ctx.http, |response| {
-                        response
-                            .kind(InteractionResponseType::ChannelMessageWithSource)
-                            .interaction_response_data(|message| message.content(msg))
-                    })
-                    .await
-                {
-                    println!("Cannot respond to slash command: {}", why);
+            for c in &self.commands {
+                if command.data.name == c.name() {
+                    c.execute(ctx, command).await;
+                    break;
                 }
             }
         }
@@ -294,12 +152,13 @@ async fn main() {
         println!("Failed to open db {:?}", e);
         return;
     }
-
+    let state = Arc::new(Mutex::new(HandlerState {
+        seasons: HashMap::new(),
+        db: db.unwrap(),
+    }));
     let handler = Handler {
-        state: Arc::new(Mutex::new(HandlerState {
-            seasons: HashMap::new(),
-            db: db.unwrap(),
-        })),
+        state: state.clone(),
+        commands: vec![Box::new(RegCommand::new(state.clone()))],
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
     handler.listen_for_race_guide(token.clone(), rx);
