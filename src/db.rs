@@ -57,24 +57,15 @@ impl Db {
         )?;
         Ok(Db { con })
     }
-    pub fn upsert_reg(
-        &mut self,
-        guild_id: Option<GuildId>,
-        channel_id: ChannelId,
-        series_id: i64,
-        min_reg: i64,
-        max_reg: i64,
-        open: bool,
-        close: bool,
-        created_by: &str,
-    ) -> rusqlite::Result<usize> {
+    pub fn upsert_reg(&mut self, reg: &Reg, created_by: &str) -> rusqlite::Result<usize> {
         self.con.execute("INSERT INTO reg(guild_id, channel_id, series_id, min_reg, max_reg, open, close, created_by, created_date)
                 VALUES (?,?,?,?,?,?,?,?,datetime('now')) ON CONFLICT DO UPDATE SET
                     min_reg = excluded.min_reg,
                     max_reg = excluded.max_reg,
                     open    = excluded.open,
                     close   = excluded.close,
-                    modified_date = excluded.created_date", params![guild_id.map(|g|g.0), channel_id.0, series_id, min_reg, max_reg, open, close, created_by])
+                    modified_date = excluded.created_date", 
+                params![reg.guild.map(|g|g.0), reg.channel.0, reg.series_id,reg.min_reg, reg.max_reg, reg.open, reg.close, created_by])
     }
     pub fn delete_reg(&mut self, channel_id: ChannelId, series_id: i64) -> rusqlite::Result<usize> {
         self.con.execute(

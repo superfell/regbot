@@ -157,13 +157,15 @@ impl EventHandler for Handler {
                         (false, false) => "",
                     });
                     dbr = st.db.upsert_reg(
-                        command.guild_id,
-                        command.channel_id,
-                        series_id,
-                        min_reg,
-                        max_reg,
-                        open,
-                        close,
+                        &Reg {
+                            guild: command.guild_id,
+                            channel: command.channel_id,
+                            series_id,
+                            min_reg,
+                            max_reg,
+                            open,
+                            close,
+                        },
                         &command.user.name,
                     );
                 }
