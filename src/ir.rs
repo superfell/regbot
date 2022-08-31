@@ -105,14 +105,14 @@ struct Link {
     pub link: String,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SeasonList {
     season_quarter: i64,
     season_year: i64,
     seasons: Vec<SeasonBasic>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SeasonBasic {
     season_id: i64,
     series_id: i64,
@@ -126,7 +126,7 @@ pub struct SeasonBasic {
     driver_changes: bool,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RaceGuide {
     pub subscribed: bool,
     pub sessions: Vec<RaceGuideEntry>,
@@ -135,7 +135,7 @@ pub struct RaceGuide {
     pub success: bool,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RaceGuideEntry {
     pub season_id: i64,
     pub start_time: DateTime<Utc>,

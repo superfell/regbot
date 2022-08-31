@@ -1,7 +1,7 @@
 use crate::ir_watcher::{Announcement, AnnouncementType};
 use rusqlite::{params, Connection, Row};
 use serenity::model::prelude::{ChannelId, GuildId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 #[allow(dead_code)]
@@ -96,15 +96,6 @@ impl Db {
     pub fn delete_guild(&mut self, guild_id: GuildId) -> rusqlite::Result<usize> {
         self.con
             .execute("DELETE FROM reg WHERE guild_id=?", params![guild_id.0])
-    }
-    pub fn series_ids(&self) -> rusqlite::Result<HashSet<i64>> {
-        let mut stmt = self.con.prepare("SELECT distinct series_id FROM reg")?;
-        let mut res = HashSet::new();
-        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
-        for sid in rows {
-            res.insert(sid?);
-        }
-        Ok(res)
     }
     pub fn regs(&self) -> rusqlite::Result<HashMap<ChannelId, Vec<Reg>>> {
         let mut res = HashMap::new();

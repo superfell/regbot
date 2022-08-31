@@ -97,7 +97,7 @@ pub struct SeasonInfo {
     pub lc_name: String,
 }
 impl SeasonInfo {
-    pub fn new(series: &Series, season: &Season) -> Self {
+    pub fn new(series: &Series, _season: &Season) -> Self {
         let n = &series.series_name;
         SeasonInfo {
             series_id: series.series_id,
@@ -161,6 +161,7 @@ impl Display for Announcement {
 
 struct SeriesReg {
     series: Series,
+    #[allow(dead_code)]
     season: Season,
     race_guide: Option<RaceGuideEntry>,
 }
