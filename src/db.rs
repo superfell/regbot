@@ -86,7 +86,7 @@ impl Db {
     pub fn delete_reg(&mut self, channel_id: ChannelId, series_id: i64) -> rusqlite::Result<usize> {
         self.con.execute(
             "DELETE FROM reg WHERE series_id=? AND channel_id=?",
-            params![channel_id.0, series_id],
+            params![series_id, channel_id.0],
         )
     }
     pub fn delete_channel(&mut self, channel_id: ChannelId) -> rusqlite::Result<usize> {

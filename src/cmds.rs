@@ -234,6 +234,99 @@ impl ACommand for ListCommand {
         }
     }
 }
+
+pub struct RemoveCommand {
+    state: Arc<Mutex<HandlerState>>,
+}
+impl RemoveCommand {
+    pub fn new(state: Arc<Mutex<HandlerState>>) -> Self {
+        Self { state }
+    }
+}
+#[async_trait]
+impl ACommand for RemoveCommand {
+    fn name(&self) -> &str {
+        "nomore"
+    }
+    fn create(&self, commands: &mut CreateApplicationCommands) {
+        commands.create_application_command(|command| {
+            command
+                .name(self.name())
+                .description("Stop reporting race registrations for a series.")
+                .create_option(
+                    |option| -> &mut serenity::builder::CreateApplicationCommandOption {
+                        option
+                            .name("series")
+                            .description("The series to announce")
+                            .set_autocomplete(true)
+                            .kind(CommandOptionType::String)
+                            .required(true)
+                    },
+                )
+        });
+    }
+
+    async fn autocomplete(&self, ctx: Context, autocomp: AutocompleteInteraction) {
+        for opt in &autocomp.data.options {
+            if opt.focused && opt.name == "series" {
+                if let Err(e) = autocomp
+                    .create_autocomplete_response(&ctx.http, |response| {
+                        let search_txt = match &autocomp.data.options[0].value {
+                            Some(serde_json::Value::String(s)) => s,
+                            _ => "",
+                        };
+                        let mut count = 0;
+                        let lc_txt = search_txt.to_lowercase();
+
+                        let st = self.state.lock().expect("Unable to lock state");
+                        let regs = st
+                            .db
+                            .channel_regs(autocomp.channel_id)
+                            .expect("Failed to read db");
+                        for reg in regs {
+                            let s = &st.seasons[&reg.series_id];
+                            if s.lc_name.contains(&lc_txt) {
+                                response.add_string_choice(&s.name, s.series_id);
+                                count += 1;
+                                if count == 25 {
+                                    break;
+                                }
+                            }
+                        }
+                        response
+                    })
+                    .await
+                {
+                    println!("Failed to send autocomp response {:?}", e);
+                }
+            }
+        }
+    }
+    async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
+        let series_id = match command.data.options[0].resolved.as_ref().unwrap() {
+            CommandDataOptionValue::String(x) => x.parse(),
+            CommandDataOptionValue::Integer(x) => Ok(*x),
+            _ => Ok(414),
+        }
+        .expect("Failed to parse series_id");
+        {
+            let mut st = self.state.lock().expect("Unable to lock state");
+            if let Err(e) = st.db.delete_reg(command.channel_id, series_id) {
+                println!("failed to remove registration {}", e);
+            }
+        }
+        if let Err(e) = command
+            .create_interaction_response(&ctx.http, |r| {
+                r.interaction_response_data(|d| d.content("Okay, I wont mention it again."));
+                r
+            })
+            .await
+        {
+            println!("failed to send command response {}", e);
+        }
+    }
+}
+
 fn resolve_option_i64(opts: &[CommandDataOption], opt_name: &str) -> Option<i64> {
     for o in opts {
         if o.name == opt_name {
