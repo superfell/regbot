@@ -219,7 +219,7 @@ impl ACommand for ListCommand {
                 } else {
                     msgs.push("Will post about race registrations for:".to_string());
                     for (idx, x) in r.iter().enumerate() {
-                        msgs.push(x.describe(&series[idx]));
+                        msgs.push(format!("\u{2981} {}", x.describe(&series[idx])));
                     }
                 }
             }
