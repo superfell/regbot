@@ -106,13 +106,10 @@ impl ACommand for RegCommand {
     }
 
     async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
-        let series_id = match command.data.options[0].resolved.as_ref().unwrap() {
-            CommandDataOptionValue::String(x) => x.parse(),
-            CommandDataOptionValue::Integer(x) => Ok(*x),
-            _ => Ok(414),
-        }
-        .expect("Failed to parse series_id");
-
+        let series_id = match resolve_series_id(&ctx, &command).await {
+            None => return,
+            Some(i) => i,
+        };
         let msg: String;
         let open = resolve_option_bool(&command.data.options, "open").unwrap_or(false);
         let close = resolve_option_bool(&command.data.options, "close").unwrap_or(false);
@@ -141,33 +138,17 @@ impl ACommand for RegCommand {
             );
             dbr = st.db.upsert_reg(&reg, &command.user.name);
         }
-        if let Err(e) = dbr {
-            println!("db failed to upsert reg {:?}", e);
-            if let Err(why) = command
-                .create_interaction_response(&ctx.http, |response| {
-                    response
-                        .kind(InteractionResponseType::ChannelMessageWithSource)
-                        .interaction_response_data(|message| {
-                            message.flags(MessageFlags::EPHEMERAL);
-                            message
-                                .content("Sorry I appear to have lost my notepad, try again later.")
-                        })
-                })
+        match dbr {
+            Err(e) => {
+                println!("db failed to upsert reg {:?}", e);
+                respond_error(
+                    &ctx,
+                    &command,
+                    "Sorry I appear to have lost my notepad, try again later.",
+                )
                 .await
-            {
-                println!("Cannot respond to slash command: {}", why);
             }
-        }
-
-        if let Err(why) = command
-            .create_interaction_response(&ctx.http, |response| {
-                response
-                    .kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|message| message.content(msg))
-            })
-            .await
-        {
-            println!("Cannot respond to slash command: {}", why);
+            Ok(_) => respond_msg(&ctx, &command, &msg).await,
         }
     }
 }
@@ -205,15 +186,19 @@ impl ACommand for ListCommand {
                     .collect();
             }
         }
-        let mut msgs = Vec::new();
         match regs {
             Err(e) => {
                 println!("Failed to read watches {:?}", e);
-                msgs.push(
-                    "Sorry, i can't find my notebook right how, try again later.".to_string(),
-                );
+                respond_error(
+                    &ctx,
+                    &command,
+                    "Sorry, i can't find my notebook right how, try again later.",
+                )
+                .await;
+                return;
             }
             Ok(r) => {
+                let mut msgs = Vec::new();
                 if r.is_empty() {
                     msgs.push("No registration announcements for this channel.".to_string());
                 } else {
@@ -222,16 +207,9 @@ impl ACommand for ListCommand {
                         msgs.push(format!("\u{2981} {}", x.describe(&series[idx])));
                     }
                 }
+                respond_msg(&ctx, &command, &msgs.join("\n")).await;
             }
         };
-        if let Err(e) = command
-            .create_interaction_response(&ctx.http, |r| {
-                r.interaction_response_data(|d| d.content(msgs.join("\n")))
-            })
-            .await
-        {
-            println!("Failed to respond to /{}: {}", self.name(), e);
-        }
     }
 }
 
@@ -303,27 +281,78 @@ impl ACommand for RemoveCommand {
         }
     }
     async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
-        let series_id = match command.data.options[0].resolved.as_ref().unwrap() {
-            CommandDataOptionValue::String(x) => x.parse(),
-            CommandDataOptionValue::Integer(x) => Ok(*x),
-            _ => Ok(414),
-        }
-        .expect("Failed to parse series_id");
+        let series_id = match resolve_series_id(&ctx, &command).await {
+            None => return,
+            Some(i) => i,
+        };
+        let dbr;
         {
             let mut st = self.state.lock().expect("Unable to lock state");
-            if let Err(e) = st.db.delete_reg(command.channel_id, series_id) {
+            dbr = st.db.delete_reg(command.channel_id, series_id);
+        }
+        match dbr {
+            Err(e) => {
                 println!("failed to remove registration {}", e);
+                respond_error(
+                    &ctx,
+                    &command,
+                    "Sorry, I seem to have lost my notepad, please try again later.",
+                )
+                .await;
+            }
+            Ok(_) => {
+                respond_msg(&ctx, &command, "Okay, I wont mention it again.").await;
             }
         }
-        if let Err(e) = command
-            .create_interaction_response(&ctx.http, |r| {
-                r.interaction_response_data(|d| d.content("Okay, I wont mention it again."));
-                r
-            })
-            .await
-        {
-            println!("failed to send command response {}", e);
+    }
+}
+
+async fn resolve_series_id(ctx: &Context, command: &ApplicationCommandInteraction) -> Option<i64> {
+    let maybe_series_id = match command.data.options[0].resolved.as_ref().unwrap() {
+        CommandDataOptionValue::String(x) => x.parse(),
+        CommandDataOptionValue::Integer(x) => Ok(*x),
+        _ => Ok(414),
+    };
+    match maybe_series_id {
+        Err(_) => {
+            respond_error(
+                ctx,
+                command,
+                "Please select one of the series from the autocomplete list.",
+            )
+            .await;
+            None
         }
+        Ok(sid) => Some(sid),
+    }
+}
+
+async fn respond_msg(ctx: &Context, command: &ApplicationCommandInteraction, msg: &str) {
+    if let Err(e) = command
+        .create_interaction_response(&ctx.http, |response| {
+            response
+                .kind(InteractionResponseType::ChannelMessageWithSource)
+                .interaction_response_data(|message| message.content(msg))
+        })
+        .await
+    {
+        println!("Failed to respond to command {}", e);
+    }
+}
+
+async fn respond_error(ctx: &Context, command: &ApplicationCommandInteraction, msg: &str) {
+    if let Err(e) = command
+        .create_interaction_response(&ctx.http, |response| {
+            response
+                .kind(InteractionResponseType::ChannelMessageWithSource)
+                .interaction_response_data(|message| {
+                    message.flags(MessageFlags::EPHEMERAL);
+                    message.content(msg)
+                })
+        })
+        .await
+    {
+        println!("Failed to respond to command {}", e);
     }
 }
 
@@ -379,13 +408,6 @@ impl ACommand for HelpCommand {
         });
     }
     async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
-        if let Err(e) = command
-            .create_interaction_response(&ctx.http, |r| {
-                r.interaction_response_data(|d| d.content(HELP_MSG))
-            })
-            .await
-        {
-            println!("Failed to respond to /{}: {}", self.name(), e);
-        }
+        respond_msg(&ctx, &command, HELP_MSG).await;
     }
 }
