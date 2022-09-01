@@ -20,7 +20,7 @@ impl Reg {
         assert_eq!(self.series_id, ann.curr.series_id);
         match ann.ann_type {
             AnnouncementType::Open => self.open,
-            AnnouncementType::Closed => self.close,
+            AnnouncementType::Closed => self.close && ann.prev.entry_count >= self.min_reg,
             AnnouncementType::Count => {
                 ann.splits_changed()
                     || (ann.curr.entry_count >= self.min_reg

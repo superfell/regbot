@@ -63,7 +63,6 @@ impl IrClient {
             ));
         }
         let lnk: Link = res.json().await?;
-        println!("Expiry of response is {:?}", lnk.expires);
         let req = self.client.get(&lnk.link);
         match req.send().await?.json().await {
             Ok(r) => Ok(r),

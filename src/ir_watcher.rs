@@ -152,6 +152,16 @@ impl Display for Announcement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let off = Duration::seconds(29);
         let to_start = self.curr.start_time - Utc::now();
+        let split_text = |rge: &RaceGuideEntry| {
+            let split_count = rge.num_splits(self.num_split);
+            if rge.entry_count < self.num_official {
+                "".to_string()
+            } else if split_count < 2 {
+                "Official! ".to_string()
+            } else {
+                format!("{} splits! ", split_count)
+            }
+        };
         match self.ann_type {
             AnnouncementType::Open => write!(
                 f,
@@ -173,22 +183,23 @@ impl Display for Announcement {
                         }
                     )
                 };
-                let split_count = self.curr.num_splits(self.num_split);
-                let official = if self.curr.entry_count < self.num_official {
-                    "".to_string()
-                } else if split_count < 2 {
-                    "Official! ".to_string()
-                } else {
-                    format!("{} splits! ", split_count)
-                };
                 write!(
                     f,
                     "{}: {} registered. {}Session starts in {}",
-                    &self.series_name, self.curr.entry_count, official, starts_in
+                    &self.series_name,
+                    self.curr.entry_count,
+                    split_text(&self.curr),
+                    starts_in
                 )
             }
             AnnouncementType::Closed => {
-                write!(f, "{}: Registration closed \u{2634}", &self.series_name)
+                write!(
+                    f,
+                    "{}: registration closed \u{26d4} {} registered {}.",
+                    &self.series_name,
+                    self.prev.entry_count,
+                    split_text(&self.prev)
+                )
             }
         }
     }

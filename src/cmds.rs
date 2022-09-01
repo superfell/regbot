@@ -387,11 +387,13 @@ fn resolve_option_bool(opts: &[CommandDataOption], opt_name: &str) -> Option<boo
 
 pub struct HelpCommand;
 
-const HELP_MSG:&str = "Hey there, I'm Reginald. While i sip my coffee I'll keep an eye on race registrations for you. Let me know what series you're interested in and I'll message a channel when I see some activity for that series. Use the /watch command to select a series.
+const HELP_MSG:&str = "Hey there, I'm Reginald. While I sip my coffee I'll keep an eye on race registrations for you. Let me know what series you're interested in and I'll message a channel when I see some activity for that series. Use the /watch command to select a series.
 
 You can control how many race entries are needed before i say anything with the min_reg option. I can also stop yammering on about it once there's a critical mass registered, use the max_reg option. If you want to always know when race registration opens or closes, you can use the open and close options to turn that on.
 
 By default I'll start reporting registrations at 50% of official and stop if it reaches halfway between official and splitting.
+
+The entry/split numbers reported at registration closed might not match exactly the race session(s) as you can't get the numbers until the end of the race.
 
 If you forget what you asked for, you can /watching to find out. You can also /nomore if you don't care about a series anymore.";
 
