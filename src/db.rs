@@ -22,7 +22,9 @@ impl Reg {
             AnnouncementType::Open => self.open,
             AnnouncementType::Closed => self.close,
             AnnouncementType::Count => {
-                ann.curr.entry_count >= self.min_reg && ann.curr.entry_count <= self.max_reg
+                ann.splits_changed()
+                    || (ann.curr.entry_count >= self.min_reg
+                        && ann.curr.entry_count <= self.max_reg)
             }
         }
     }

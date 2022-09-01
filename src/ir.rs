@@ -148,7 +148,11 @@ pub struct RaceGuideEntry {
     pub session_id: Option<i64>,
     pub entry_count: i64,
 }
-
+impl RaceGuideEntry {
+    pub fn num_splits(&self, split_at: i64) -> i64 {
+        1 + ((self.entry_count - 1) / split_at)
+    }
+}
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Season {
     pub active: bool,

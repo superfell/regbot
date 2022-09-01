@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
@@ -121,6 +121,8 @@ pub struct Announcement {
     pub series_name: String,
     pub prev: RaceGuideEntry,
     pub curr: RaceGuideEntry,
+    pub num_official: i64,
+    pub num_split: i64,
     pub ann_type: AnnouncementType,
 }
 impl Announcement {
@@ -128,33 +130,58 @@ impl Announcement {
         series_name: String,
         prev: RaceGuideEntry,
         curr: RaceGuideEntry,
+        num_official: i64,
+        num_split: i64,
         ann_type: AnnouncementType,
     ) -> Self {
         Announcement {
             series_name,
             prev,
             curr,
+            num_official,
+            num_split,
             ann_type,
         }
+    }
+    // returns true if the number of splits has changed
+    pub fn splits_changed(&self) -> bool {
+        self.prev.num_splits(self.num_split) != self.curr.num_splits(self.num_split)
     }
 }
 impl Display for Announcement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let off = Duration::seconds(29);
+        let to_start = self.curr.start_time - Utc::now();
         match self.ann_type {
             AnnouncementType::Open => write!(
                 f,
                 "{}: Registration open!, {} minutes til race time",
                 &self.series_name,
-                (self.curr.start_time - Utc::now()).num_minutes()
+                (to_start + off).num_minutes()
             ),
-            AnnouncementType::Count => write!(
-                f,
-                "{}: {} registered. Session starts in {} minutes",
-                &self.series_name,
-                self.curr.entry_count,
-                (self.curr.start_time - Utc::now()).num_minutes(),
-            ),
-            AnnouncementType::Closed => write!(f, "{}: Registration closed.", &self.series_name),
+            AnnouncementType::Count => {
+                let starts_in = if to_start.num_minutes() < 1 {
+                    "less than a minute! \u{1f3ce}".to_string()
+                } else {
+                    format!("{} minutes", (to_start + off).num_minutes())
+                };
+                let split_count = self.curr.num_splits(self.num_split);
+                let official = if self.curr.entry_count < self.num_official {
+                    "".to_string()
+                } else if split_count < 2 {
+                    "Official! ".to_string()
+                } else {
+                    format!("{} splits! ", split_count)
+                };
+                write!(
+                    f,
+                    "{}: {} registered. {}Session starts in {}",
+                    &self.series_name, self.curr.entry_count, official, starts_in
+                )
+            }
+            AnnouncementType::Closed => {
+                write!(f, "{}: Registration closed \u{2634}", &self.series_name)
+            }
         }
     }
 }
@@ -189,6 +216,8 @@ impl SeriesReg {
                 self.series.series_name.clone(),
                 prev,
                 e.clone(),
+                self.series.min_starters,
+                self.series.max_starters,
                 AnnouncementType::Open,
             ))
         // reg count changed
@@ -201,6 +230,8 @@ impl SeriesReg {
                 self.series.series_name.clone(),
                 prev,
                 e.clone(),
+                self.series.min_starters,
+                self.series.max_starters,
                 AnnouncementType::Count,
             ))
         // reg closed
@@ -209,6 +240,8 @@ impl SeriesReg {
                 self.series.series_name.clone(),
                 prev,
                 e.clone(),
+                self.series.min_starters,
+                self.series.max_starters,
                 AnnouncementType::Closed,
             ))
         } else {
