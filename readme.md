@@ -14,11 +14,11 @@ Consider if you want to restrict who can run /watch and /nomore, you might want 
 ## TODO
 
 - update season/series list on regular basis.
-- show track info in messages.
-- improve time to session reporting.
+- show track info in messages?
 
 ## DONE
 
+- improve time to session reporting.
 - look at race guide expiry from ir
 - fix issue with arg order handling
 - command to list current watches

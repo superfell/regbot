@@ -31,6 +31,36 @@ pub async fn iracing_loop_task(user: String, password: String, mut tx: Sender<Ra
         }
     }
 }
+async fn update_series_info(
+    client: &IrClient,
+    series_state: &mut HashMap<i64, SeriesReg>,
+    tx: &mut Sender<RaceGuideEvent>,
+) -> anyhow::Result<()> {
+    println!("checking for updated series/season info");
+    let seasons = client.seasons().await?;
+    let series = client.series().await?;
+    let mut series_by_id = HashMap::with_capacity(series.len());
+    for s in series {
+        series_by_id.insert(s.series_id, s);
+    }
+    for season in seasons {
+        let series = series_by_id.remove(&season.series_id).unwrap();
+        series_state
+            .entry(series.series_id)
+            .or_insert_with(|| SeriesReg::new(series, season));
+    }
+
+    let season_infos: HashMap<i64, SeasonInfo> = series_state
+        .iter()
+        .map(|(k, v)| (*k, SeasonInfo::new(&v.series, &v.season)))
+        .collect();
+
+    println!("Sending {} series to discord bot", season_infos.len());
+    if let Err(err) = tx.send(RaceGuideEvent::Seasons(season_infos)).await {
+        println!("Error sending Seasons to channel {:?}", err);
+    }
+    Ok(())
+}
 async fn iracing_loop(
     series_state: &mut HashMap<i64, SeriesReg>,
     user: &str,
@@ -39,26 +69,16 @@ async fn iracing_loop(
 ) -> anyhow::Result<()> {
     let loop_interval = tokio::time::Duration::from_secs(61);
     let client = IrClient::new(user, password).await?;
-    if series_state.is_empty() {
-        let seasons = client.seasons().await?;
-        let series = client.series().await?;
-        let mut series_by_id = HashMap::with_capacity(series.len());
-        for s in series {
-            series_by_id.insert(s.series_id, s);
-        }
-        let mut season_infos = HashMap::with_capacity(series_by_id.len());
-        for season in seasons {
-            let series = series_by_id.remove(&season.series_id).unwrap();
-            season_infos.insert(series.series_id, SeasonInfo::new(&series, &season));
-            let reg = SeriesReg::new(series, season);
-            series_state.insert(reg.series_id(), reg);
-        }
-        if let Err(err) = tx.send(RaceGuideEvent::Seasons(season_infos)).await {
-            println!("Error sending Seasons to channel {:?}", err);
-        }
-    }
+    //
+    let mut series_updated = Utc::now();
+    update_series_info(&client, series_state, tx).await?;
     loop {
         let start = Instant::now();
+        let now_utc = Utc::now();
+        if now_utc.date_naive() != series_updated.date_naive() {
+            update_series_info(&client, series_state, tx).await?;
+            series_updated = now_utc;
+        }
         println!("checking for race guide updates");
         let guide = client.race_guide().await?;
         // the guide contains race starts for upto 3 hours, so each series may appear more than once
