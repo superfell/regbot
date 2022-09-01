@@ -163,7 +163,15 @@ impl Display for Announcement {
                 let starts_in = if to_start.num_minutes() < 1 {
                     "less than a minute! \u{1f3ce}".to_string()
                 } else {
-                    format!("{} minutes", (to_start + off).num_minutes())
+                    format!(
+                        "{} minute{}",
+                        (to_start + off).num_minutes(),
+                        if (to_start + off).num_minutes() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    )
                 };
                 let split_count = self.curr.num_splits(self.num_split);
                 let official = if self.curr.entry_count < self.num_official {
