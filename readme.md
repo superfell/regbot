@@ -9,6 +9,8 @@ Goto a channel where you want the announcements and use the /watch command. Tab 
 if you want. the /help command explains the settings. You can just do /watch again if you want to change the settings. Use /nomore to remove
 a series, and /watching to list all the series being watched in the channel.
 
+Consider if you want to restrict who can run /watch and /nomore, you might want to restrict these to an admin role.
+
 ## TODO
 
 - update season/series list on regular basis.
