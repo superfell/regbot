@@ -1,8 +1,45 @@
+use crate::ir::{Season, Series};
 use crate::ir_watcher::{Announcement, AnnouncementType};
 use rusqlite::{params, Connection, Row};
 use serenity::model::prelude::{ChannelId, GuildId};
 use std::collections::HashMap;
 use std::fmt::Write;
+
+#[derive(Debug, Clone)]
+pub struct SeasonInfo {
+    pub series_id: i64,
+    pub name: String,
+    pub reg_official: i64,
+    pub reg_split: i64,
+    pub week: i64,
+    pub track_name: String,
+    pub track_config: String,
+    pub track_cat: Option<String>,
+
+    pub lc_name: String,
+}
+impl SeasonInfo {
+    pub fn new(series: &Series, _season: &Season) -> Self {
+        let n = &series.series_name;
+        let sc = &_season.schedules[(_season.race_week - 1) as usize];
+        SeasonInfo {
+            series_id: series.series_id,
+            name: n.to_string(),
+            reg_official: series.min_starters,
+            reg_split: series.max_starters,
+            week: _season.race_week,
+            track_name: sc.track.track_name.clone(),
+            track_config: sc
+                .track
+                .config_name
+                .as_ref()
+                .map(|c| c.clone())
+                .unwrap_or_default(),
+            track_cat: sc.track.category.clone(),
+            lc_name: n.to_lowercase(),
+        }
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -73,7 +110,53 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_series_id ON reg(series_id)",
             [],
         )?;
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS series(
+                                series_id    integer primary key,
+                                name         text,
+                                reg_official integer,
+                                reg_split    integer,
+                                week         integer,
+                                track_name   text,
+                                track_config text,
+                                traack_cat   text);",
+            [],
+        )?;
         Ok(Db { con })
+    }
+    pub fn upsert_series(&mut self, s: &SeasonInfo) -> rusqlite::Result<usize> {
+        self.con.execute("INSERT INTO series(series_id,name,reg_official,reg_split,week,track_name,track_config,tracK_cat)
+                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET
+                    name         = excluded.name,
+                    reg_official = excluded.reg_official,
+                    reg_split    = excluded.reg_split,
+                    week         = excluded.week,
+                    track_name   = excluded.track_name,
+                    track_config = excluded.tracK_config,
+                    track_cat    = excluded.track_cat", 
+                params![s.series_id,s.name,s.reg_official,s.reg_split,s.week,s.track_name,s.track_config,s.track_cat])
+    }
+    pub fn get_series(&self) -> rusqlite::Result<HashMap<i64, SeasonInfo>> {
+        let mut stmt = self.con.prepare("SELECT * FROM series;")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SeasonInfo {
+                series_id: row.get("series_id")?,
+                name: row.get("name")?,
+                reg_official: row.get("reg_official")?,
+                reg_split: row.get("reg_split")?,
+                week: row.get("week")?,
+                track_name: row.get("track_name")?,
+                track_config: row.get("track_config")?,
+                track_cat: row.get("track_cat")?,
+                lc_name: row.get::<_, String>("name")?.to_lowercase(),
+            })
+        })?;
+        let mut res = HashMap::new();
+        for row in rows {
+            let s = row?;
+            res.insert(s.series_id, s);
+        }
+        Ok(res)
     }
     pub fn upsert_reg(&mut self, reg: &Reg, created_by: &str) -> rusqlite::Result<usize> {
         self.con.execute("INSERT INTO reg(guild_id, channel_id, series_id, min_reg, max_reg, open, close, created_by, created_date)

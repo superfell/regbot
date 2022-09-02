@@ -5,6 +5,7 @@ use std::{
 };
 use tokio::{sync::mpsc::Sender, time::Instant};
 
+use crate::db::SeasonInfo;
 use crate::ir::{IrClient, RaceGuideEntry, Season, Series};
 
 #[derive(Debug)]
@@ -45,6 +46,7 @@ async fn update_series_info(
     }
     for season in seasons {
         let series = series_by_id.remove(&season.series_id).unwrap();
+
         series_state
             .entry(series.series_id)
             .or_insert_with(|| SeriesReg::new(series, season));
@@ -105,27 +107,6 @@ async fn iracing_loop(
             }
         }
         tokio::time::sleep_until(start + loop_interval).await;
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SeasonInfo {
-    pub series_id: i64,
-    pub reg_official: i64,
-    pub reg_split: i64,
-    pub name: String,
-    pub lc_name: String,
-}
-impl SeasonInfo {
-    pub fn new(series: &Series, _season: &Season) -> Self {
-        let n = &series.series_name;
-        SeasonInfo {
-            series_id: series.series_id,
-            reg_official: series.min_starters,
-            reg_split: series.max_starters,
-            name: n.to_string(),
-            lc_name: n.to_lowercase(),
-        }
     }
 }
 

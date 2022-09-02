@@ -1,7 +1,7 @@
 use cmds::{ACommand, HelpCommand, ListCommand, RegCommand, RemoveCommand};
-use db::{Db, Reg};
+use db::{Db, Reg, SeasonInfo};
 use ir_watcher::Announcement;
-use ir_watcher::{iracing_loop_task, RaceGuideEvent, SeasonInfo};
+use ir_watcher::{iracing_loop_task, RaceGuideEvent};
 use serenity::async_trait;
 use serenity::http::Http;
 use serenity::model::application::interaction::Interaction;
