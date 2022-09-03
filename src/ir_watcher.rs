@@ -2,11 +2,12 @@ use chrono::{Duration, Utc};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
+    sync::{Arc, Mutex},
 };
 use tokio::{sync::mpsc::Sender, time::Instant};
 
-use crate::db::SeasonInfo;
-use crate::ir::{IrClient, RaceGuideEntry, Season, Series};
+use crate::ir::{IrClient, RaceGuideEntry};
+use crate::{db::SeasonInfo, HandlerState};
 
 #[derive(Debug)]
 pub enum RaceGuideEvent {
@@ -14,13 +15,18 @@ pub enum RaceGuideEvent {
     Announcements(HashMap<i64, Announcement>),
 }
 
-pub async fn iracing_loop_task(user: String, password: String, mut tx: Sender<RaceGuideEvent>) {
+pub async fn iracing_loop_task(
+    user: String,
+    password: String,
+    mut tx: Sender<RaceGuideEvent>,
+    state: Arc<Mutex<HandlerState>>,
+) {
     let def_backoff = tokio::time::Duration::from_secs(1);
     let max_backoff = tokio::time::Duration::from_secs(120);
     let mut backoff = def_backoff;
     let mut series_state = HashMap::new();
     loop {
-        match iracing_loop(&mut series_state, &user, &password, &mut tx).await {
+        match iracing_loop(&mut series_state, &user, &password, &mut tx, state.clone()).await {
             Err(e) => {
                 println!("Error polling iRacing {:?}", e);
                 tokio::time::sleep(backoff).await;
@@ -36,6 +42,7 @@ async fn update_series_info(
     client: &IrClient,
     series_state: &mut HashMap<i64, SeriesReg>,
     tx: &mut Sender<RaceGuideEvent>,
+    state: Arc<Mutex<HandlerState>>,
 ) -> anyhow::Result<()> {
     println!("checking for updated series/season info");
     let seasons = client.seasons().await?;
@@ -44,19 +51,24 @@ async fn update_series_info(
     for s in series {
         series_by_id.insert(s.series_id, s);
     }
-    for season in seasons {
-        let series = series_by_id.remove(&season.series_id).unwrap();
+    let season_infos: HashMap<i64, SeasonInfo>;
+    {
+        let mut st = state.lock().expect("Unable to lock state");
+        let mut updater = st.db.start_series_update()?;
+        for season in seasons {
+            let series = series_by_id.remove(&season.series_id).unwrap();
+            let si = SeasonInfo::new(&series, &season);
+            updater.upsert(&si)?;
+        }
+        updater.commit()?;
 
-        series_state
-            .entry(series.series_id)
-            .or_insert_with(|| SeriesReg::new(series, season));
+        season_infos = st.db.get_series()?;
+        for si in season_infos.values() {
+            series_state
+                .entry(si.series_id)
+                .or_insert_with(|| SeriesReg::new(si));
+        }
     }
-
-    let season_infos: HashMap<i64, SeasonInfo> = series_state
-        .iter()
-        .map(|(k, v)| (*k, SeasonInfo::new(&v.series, &v.season)))
-        .collect();
-
     println!("Sending {} series to discord bot", season_infos.len());
     if let Err(err) = tx.send(RaceGuideEvent::Seasons(season_infos)).await {
         println!("Error sending Seasons to channel {:?}", err);
@@ -68,20 +80,21 @@ async fn iracing_loop(
     user: &str,
     password: &str,
     tx: &mut Sender<RaceGuideEvent>,
+    state: Arc<Mutex<HandlerState>>,
 ) -> anyhow::Result<()> {
     let loop_interval = tokio::time::Duration::from_secs(61);
     let client = IrClient::new(user, password).await?;
     //
     let mut series_updated = Utc::now();
-    update_series_info(&client, series_state, tx).await?;
+    update_series_info(&client, series_state, tx, state.clone()).await?;
     loop {
-        let start = Instant::now();
         let now_utc = Utc::now();
         if now_utc.date_naive() != series_updated.date_naive() {
-            update_series_info(&client, series_state, tx).await?;
+            update_series_info(&client, series_state, tx, state.clone()).await?;
             series_updated = now_utc;
         }
         println!("checking for race guide updates");
+        let start = Instant::now();
         let guide = client.race_guide().await?;
         // the guide contains race starts for upto 3 hours, so each series may appear more than once
         // so we need to keep track of which ones we've seen and only process the first one for each series.
@@ -91,21 +104,24 @@ async fn iracing_loop(
             if seen.insert(e.series_id) {
                 if let Some(sr) = series_state.get_mut(&e.series_id) {
                     if let Some(msg) = sr.update(e) {
-                        announcements.insert(sr.series_id(), msg);
+                        announcements.insert(sr.series.series_id, msg);
                     }
                 }
                 continue;
             }
         }
+        let ann_count = announcements.len();
         if !announcements.is_empty() {
             match tx.send(RaceGuideEvent::Announcements(announcements)).await {
                 Err(err) => println!("Failed to send RaceGuideEvent to channel {:?}", err),
-                Ok(_) => println!(
-                    "all done for this time, took {}ms",
-                    (Instant::now() - start).as_millis()
-                ),
+                _ => {}
             }
         }
+        println!(
+            "all done for this time, sent {} announcements, took {}ms",
+            ann_count,
+            (Instant::now() - start).as_millis()
+        );
         tokio::time::sleep_until(start + loop_interval).await;
     }
 }
@@ -119,34 +135,28 @@ pub enum AnnouncementType {
 
 #[derive(Debug, Clone)]
 pub struct Announcement {
-    pub series_name: String,
+    pub series: SeasonInfo,
     pub prev: RaceGuideEntry,
     pub curr: RaceGuideEntry,
-    pub num_official: i64,
-    pub num_split: i64,
     pub ann_type: AnnouncementType,
 }
 impl Announcement {
     fn new(
-        series_name: String,
+        series: SeasonInfo,
         prev: RaceGuideEntry,
         curr: RaceGuideEntry,
-        num_official: i64,
-        num_split: i64,
         ann_type: AnnouncementType,
     ) -> Self {
         Announcement {
-            series_name,
+            series,
             prev,
             curr,
-            num_official,
-            num_split,
             ann_type,
         }
     }
     // returns true if the number of splits has changed
     pub fn splits_changed(&self) -> bool {
-        self.prev.num_splits(self.num_split) != self.curr.num_splits(self.num_split)
+        self.prev.num_splits(self.series.reg_split) != self.curr.num_splits(self.series.reg_split)
     }
 }
 impl Display for Announcement {
@@ -154,8 +164,8 @@ impl Display for Announcement {
         let off = Duration::seconds(29);
         let to_start = self.curr.start_time - Utc::now();
         let split_text = |rge: &RaceGuideEntry| {
-            let split_count = rge.num_splits(self.num_split);
-            if rge.entry_count < self.num_official {
+            let split_count = rge.num_splits(self.series.reg_split);
+            if rge.entry_count < self.series.reg_official {
                 "".to_string()
             } else if split_count < 2 {
                 "Official! ".to_string()
@@ -167,7 +177,7 @@ impl Display for Announcement {
             AnnouncementType::Open => write!(
                 f,
                 "{}: Registration open!, {} minutes til race time",
-                &self.series_name,
+                &self.series.name,
                 (to_start + off).num_minutes()
             ),
             AnnouncementType::Count => {
@@ -187,7 +197,7 @@ impl Display for Announcement {
                 write!(
                     f,
                     "{}: {} registered. {}Session starts in {}",
-                    &self.series_name,
+                    &self.series.name,
                     self.curr.entry_count,
                     split_text(&self.curr),
                     starts_in
@@ -197,7 +207,7 @@ impl Display for Announcement {
                 write!(
                     f,
                     "{}: registration closed \u{26d4} {} registered {}.",
-                    &self.series_name,
+                    &self.series.name,
                     self.prev.entry_count,
                     split_text(&self.prev)
                 )
@@ -207,23 +217,17 @@ impl Display for Announcement {
 }
 
 struct SeriesReg {
-    series: Series,
-    #[allow(dead_code)]
-    season: Season,
+    series: SeasonInfo,
     race_guide: Option<RaceGuideEntry>,
 }
 impl SeriesReg {
-    fn new(series: Series, season: Season) -> Self {
+    fn new(s: &SeasonInfo) -> Self {
         SeriesReg {
-            series,
-            season,
+            series: s.clone(),
             race_guide: None,
         }
     }
     #[inline]
-    fn series_id(&self) -> i64 {
-        self.series.series_id
-    }
     fn update(&mut self, e: RaceGuideEntry) -> Option<Announcement> {
         if self.race_guide.is_none() {
             self.race_guide = Some(e);
@@ -233,11 +237,9 @@ impl SeriesReg {
         let prev = self.race_guide.take().unwrap();
         let ann = if prev.session_id.is_none() && e.session_id.is_some() {
             Some(Announcement::new(
-                self.series.series_name.clone(),
+                self.series.clone(),
                 prev,
                 e.clone(),
-                self.series.min_starters,
-                self.series.max_starters,
                 AnnouncementType::Open,
             ))
         // reg count changed
@@ -247,21 +249,17 @@ impl SeriesReg {
             && (prev.entry_count > 0 || e.entry_count > 0)
         {
             Some(Announcement::new(
-                self.series.series_name.clone(),
+                self.series.clone(),
                 prev,
                 e.clone(),
-                self.series.min_starters,
-                self.series.max_starters,
                 AnnouncementType::Count,
             ))
         // reg closed
         } else if prev.session_id.is_some() && e.session_id.is_none() && prev.entry_count > 0 {
             Some(Announcement::new(
-                self.series.series_name.clone(),
+                self.series.clone(),
                 prev,
                 e.clone(),
-                self.series.min_starters,
-                self.series.max_starters,
                 AnnouncementType::Closed,
             ))
         } else {

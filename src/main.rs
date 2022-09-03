@@ -170,7 +170,7 @@ async fn main() {
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
     handler.listen_for_race_guide(token.clone(), rx);
-    spawn(iracing_loop_task(ir_user, ir_pwd, tx));
+    spawn(iracing_loop_task(ir_user, ir_pwd, tx, state.clone()));
 
     let mut client = Client::builder(token, GatewayIntents::non_privileged())
         .event_handler(handler)
@@ -191,23 +191,27 @@ async fn announce(
     reg: HashMap<ChannelId, Vec<Reg>>,
     msgs: HashMap<i64, Announcement>,
 ) {
-    println!(
-        "{} announcements, {} channels with watches",
-        msgs.len(),
-        reg.len()
-    );
     // many reg may want the same series_id. and we can message a number of msgs to a single channel at once.
+    let reg_len = reg.len();
+    let mut sent = 0;
     for (ch, regs) in reg {
         let mut msger = Messenger::new(ch, http.as_ref());
         for reg in &regs {
             if let Some(msg) = msgs.get(&reg.series_id) {
                 if reg.wants(msg) {
                     msger.add(&msg.to_string()).await;
+                    sent += 1;
                 }
             }
         }
         msger.flush().await;
     }
+    println!(
+        "{} announcements, {} channels with watches, sent {} announcements",
+        msgs.len(),
+        reg_len,
+        sent,
+    );
 }
 
 pub struct Messenger<'a> {

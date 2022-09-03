@@ -127,6 +127,7 @@ impl ACommand for RegCommand {
                 guild: command.guild_id,
                 channel: command.channel_id,
                 series_id,
+                series_name: series.name.clone(),
                 min_reg,
                 max_reg,
                 open,
@@ -134,7 +135,7 @@ impl ACommand for RegCommand {
             };
             msg = format!(
                 "Okay, I will message this channel about race registrations for {}",
-                reg.describe(&series.name)
+                &reg
             );
             dbr = st.db.upsert_reg(&reg, &command.user.name);
         }
@@ -175,16 +176,9 @@ impl ACommand for ListCommand {
     }
     async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
         let regs: rusqlite::Result<Vec<Reg>>;
-        let mut series: Vec<String> = Vec::new();
         {
             let st = self.state.lock().expect("Unable to lock state");
             regs = st.db.channel_regs(command.channel_id);
-            if let Ok(r) = &regs {
-                series = r
-                    .iter()
-                    .map(|x| st.seasons[&x.series_id].name.clone())
-                    .collect();
-            }
         }
         match regs {
             Err(e) => {
@@ -195,19 +189,23 @@ impl ACommand for ListCommand {
                     "Sorry, i can't find my notebook right how, try again later.",
                 )
                 .await;
-                return;
             }
             Ok(r) => {
-                let mut msgs = Vec::new();
                 if r.is_empty() {
-                    msgs.push("No registration announcements for this channel.".to_string());
+                    respond_msg(
+                        &ctx,
+                        &command,
+                        "No registration announcements for this channel.",
+                    )
+                    .await;
                 } else {
+                    let mut msgs = Vec::new();
                     msgs.push("Will post about race registrations for:".to_string());
-                    for (idx, x) in r.iter().enumerate() {
-                        msgs.push(format!("\u{2981} {}", x.describe(&series[idx])));
+                    for cr in r {
+                        msgs.push(format!("\u{2981} {}", cr));
                     }
+                    respond_msg(&ctx, &command, &msgs.join("\n")).await;
                 }
-                respond_msg(&ctx, &command, &msgs.join("\n")).await;
             }
         };
     }
@@ -262,9 +260,8 @@ impl ACommand for RemoveCommand {
                             .channel_regs(autocomp.channel_id)
                             .expect("Failed to read db");
                         for reg in regs {
-                            let s = &st.seasons[&reg.series_id];
-                            if s.lc_name.contains(&lc_txt) {
-                                response.add_string_choice(&s.name, s.series_id);
+                            if reg.series_name.to_lowercase().contains(&lc_txt) {
+                                response.add_string_choice(&reg.series_name, reg.series_id);
                                 count += 1;
                                 if count == 25 {
                                     break;

@@ -1,9 +1,9 @@
 use crate::ir::{Season, Series};
 use crate::ir_watcher::{Announcement, AnnouncementType};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, Row, Transaction};
 use serenity::model::prelude::{ChannelId, GuildId};
 use std::collections::HashMap;
-use std::fmt::Write;
+use std::fmt::Display;
 
 #[derive(Debug, Clone)]
 pub struct SeasonInfo {
@@ -42,11 +42,12 @@ impl SeasonInfo {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Reg {
     pub guild: Option<GuildId>,
     pub channel: ChannelId,
     pub series_id: i64,
+    pub series_name: String,
     pub min_reg: i64,
     pub max_reg: i64,
     pub open: bool,
@@ -65,24 +66,44 @@ impl Reg {
             }
         }
     }
-    pub fn describe(&self, series_name: &str) -> String {
-        let mut x = String::with_capacity(series_name.len() * 2);
+}
+impl Display for Reg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
-            &mut x,
+            f,
             "{} between {} and {} entries.",
-            series_name, self.min_reg, self.max_reg
-        )
-        .expect("Failed to format string");
-        x.push_str(match (self.open, self.close) {
+            self.series_name, self.min_reg, self.max_reg
+        )?;
+        f.write_str(match (self.open, self.close) {
             (true, true) => " I'll also say when registration opens and closes.",
             (true, false) => " I'll also say when registration opens.",
             (false, true) => " I'll also say when registration closes.",
             (false, false) => "",
-        });
-        x
+        })
     }
 }
 
+pub struct SeriesUpdater<'a> {
+    tx: Transaction<'a>,
+}
+impl<'a> SeriesUpdater<'a> {
+    pub fn upsert(&mut self, s: &SeasonInfo) -> rusqlite::Result<usize> {
+        self.tx.execute("INSERT INTO series(series_id,active,name,reg_official,reg_split,week,track_name,track_config,track_cat)
+                VALUES (?,1,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET
+                    name         = excluded.name,
+                    active       = excluded.active,
+                    reg_official = excluded.reg_official,
+                    reg_split    = excluded.reg_split,
+                    week         = excluded.week,
+                    track_name   = excluded.track_name,
+                    track_config = excluded.tracK_config,
+                    track_cat    = excluded.track_cat", 
+                params![s.series_id,s.name,s.reg_official,s.reg_split,s.week,s.track_name,s.track_config,s.track_cat])
+    }
+    pub fn commit(self) -> rusqlite::Result<()> {
+        self.tx.commit()
+    }
+}
 pub struct Db {
     con: Connection,
 }
@@ -112,32 +133,26 @@ impl Db {
         )?;
         con.execute(
             "CREATE TABLE IF NOT EXISTS series(
-                                series_id    integer primary key,
-                                name         text,
-                                reg_official integer,
-                                reg_split    integer,
-                                week         integer,
-                                track_name   text,
+                                series_id    integer  primary key,
+                                active       integer  not null,
+                                name         text     not null,
+                                reg_official integer  not null,
+                                reg_split    integer  not null,
+                                week         integer  not null,
+                                track_name   text     not null,
                                 track_config text,
-                                traack_cat   text);",
+                                track_cat   text)",
             [],
         )?;
         Ok(Db { con })
     }
-    pub fn upsert_series(&mut self, s: &SeasonInfo) -> rusqlite::Result<usize> {
-        self.con.execute("INSERT INTO series(series_id,name,reg_official,reg_split,week,track_name,track_config,tracK_cat)
-                VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET
-                    name         = excluded.name,
-                    reg_official = excluded.reg_official,
-                    reg_split    = excluded.reg_split,
-                    week         = excluded.week,
-                    track_name   = excluded.track_name,
-                    track_config = excluded.tracK_config,
-                    track_cat    = excluded.track_cat", 
-                params![s.series_id,s.name,s.reg_official,s.reg_split,s.week,s.track_name,s.track_config,s.track_cat])
+    pub fn start_series_update(&mut self) -> rusqlite::Result<SeriesUpdater> {
+        let tx = self.con.transaction()?;
+        tx.execute("UPDATE series SET active=0", [])?;
+        Ok(SeriesUpdater { tx })
     }
     pub fn get_series(&self) -> rusqlite::Result<HashMap<i64, SeasonInfo>> {
-        let mut stmt = self.con.prepare("SELECT * FROM series;")?;
+        let mut stmt = self.con.prepare("SELECT * FROM series WHERE active=1;")?;
         let rows = stmt.query_map([], |row| {
             Ok(SeasonInfo {
                 series_id: row.get("series_id")?,
@@ -191,7 +206,7 @@ impl Db {
     }
     pub fn channel_regs(&self, ch: ChannelId) -> rusqlite::Result<Vec<Reg>> {
         let mut res = Vec::new();
-        let filter = format!("WHERE channel_id={}", ch.0);
+        let filter = format!("WHERE r.channel_id={}", ch.0);
         self.query_regs(&filter, |r| res.push(r))?;
         Ok(res)
     }
@@ -199,7 +214,10 @@ impl Db {
     where
         F: FnMut(Reg),
     {
-        let sql = format!("SELECT * FROM reg {}", filter);
+        let sql = format!(
+            "SELECT r.*, s.name as series_name FROM reg r INNER JOIN series s ON r.series_id=s.series_id {}",
+            filter
+        );
         let mut stmt = self.con.prepare(&sql)?;
         for row in stmt.query_map([], to_reg)? {
             f(row?);
@@ -215,6 +233,7 @@ fn to_reg(row: &Row) -> rusqlite::Result<Reg> {
         guild: g.map(GuildId),
         channel: ChannelId(c),
         series_id: row.get("series_id")?,
+        series_name: row.get("series_name")?,
         min_reg: row.get("min_reg")?,
         max_reg: row.get("max_reg")?,
         open: row.get("open")?,
