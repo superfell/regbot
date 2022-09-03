@@ -59,10 +59,12 @@ impl Reg {
         match ann.ann_type {
             AnnouncementType::Open => self.open,
             AnnouncementType::Closed => self.close && ann.prev.entry_count >= self.min_reg,
+            // Also deal with the situation where the watch is configured for
+            // 3-5 entries and the reg count goes from 2 to 10
             AnnouncementType::Count => {
-                ann.splits_changed()
-                    || (ann.curr.entry_count >= self.min_reg
-                        && ann.curr.entry_count <= self.max_reg)
+                (ann.curr.entry_count >= self.min_reg && ann.curr.entry_count <= self.max_reg)
+                    || (ann.prev.entry_count < self.min_reg && ann.curr.entry_count > self.max_reg)
+                    || ann.splits_changed()
             }
         }
     }

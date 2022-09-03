@@ -242,7 +242,7 @@ impl SeriesReg {
                 e.clone(),
                 AnnouncementType::Open,
             ))
-        // reg count changed
+        // reg count changed.
         } else if prev.session_id.is_some()
             && e.session_id.is_some()
             && prev.entry_count != e.entry_count
