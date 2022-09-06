@@ -21,7 +21,8 @@ pub struct SeasonInfo {
 impl SeasonInfo {
     pub fn new(series: &Series, _season: &Season) -> Self {
         let n = &series.series_name;
-        let sc = &_season.schedules[(_season.race_week - 1) as usize];
+        println!("{} race week {}", series.series_name, _season.race_week);
+        let sc = &_season.schedules[_season.race_week as usize];
         SeasonInfo {
             series_id: series.series_id,
             name: n.to_string(),
