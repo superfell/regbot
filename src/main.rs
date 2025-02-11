@@ -13,6 +13,8 @@ use serenity::prelude::GatewayIntents;
 use serenity::Client;
 use std::collections::HashMap;
 use std::env;
+use std::panic::{set_hook, take_hook};
+use std::process::abort;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::spawn;
@@ -144,6 +146,8 @@ impl EventHandler for Handler {
 
 #[tokio::main]
 async fn main() {
+    // If something goes wrong, have the process panic and systemd restart the process.
+    set_abort_on_panic();
     // Configure the client with your Discord bot token in the environment.
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     let ir_user = env::var("IRUSER").expect("Expected an iRacing username in the environment");
@@ -243,4 +247,13 @@ impl<'a> Messenger<'a> {
             self.buf.clear();
         }
     }
+}
+
+fn set_abort_on_panic() {
+    let default_panic = take_hook();
+    set_hook(Box::new(move |info| {
+        eprintln!("\x1b[1;31m=== PANIC (exiting) ===\x1b[0m");
+        default_panic(info);
+        abort();
+    }));
 }

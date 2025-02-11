@@ -56,9 +56,17 @@ async fn update_series_info(
         let mut st = state.lock().expect("Unable to lock state");
         let mut updater = st.db.start_series_update()?;
         for season in seasons {
-            let series = series_by_id.remove(&season.series_id).unwrap();
-            let si = SeasonInfo::new(&series, &season);
-            updater.upsert(&si)?;
+            if let Some(series) = series_by_id.remove(&season.series_id) {
+                if let Some(si) = SeasonInfo::new(&series, &season) {
+                    println!("updating season info for {}", si.name);
+                    updater.upsert(&si)?;
+                }
+            } else {
+                println!(
+                    "** Unable to find series {:?} in seasons, skipping its update",
+                    season
+                );
+            }
         }
         updater.commit()?;
 

@@ -42,6 +42,7 @@ impl IrClient {
         path: &str,
     ) -> Result<T, anyhow::Error> {
         let u = format!("{}/{}", IR_API, path);
+        println!("starting iRacing request to {u}");
         let req = self.client.get(u.clone());
         let res = req.send().await?;
         if !res.status().is_success() {
@@ -64,6 +65,7 @@ impl IrClient {
         }
         let lnk: Link = res.json().await?;
         let req = self.client.get(&lnk.link);
+        println!("starting iRacing request to {}", &lnk.link);
         match req.send().await?.json().await {
             Ok(r) => Ok(r),
             Err(e) => {

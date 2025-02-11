@@ -19,24 +19,36 @@ pub struct SeasonInfo {
     pub lc_name: String,
 }
 impl SeasonInfo {
-    pub fn new(series: &Series, _season: &Season) -> Self {
+    pub fn new(series: &Series, season: &Season) -> Option<Self> {
         let n = &series.series_name;
-        let sc = &_season.schedules[(_season.race_week - 1) as usize];
-        SeasonInfo {
-            series_id: series.series_id,
-            name: n.to_string(),
-            reg_official: series.min_starters,
-            reg_split: series.max_starters,
-            week: _season.race_week,
-            track_name: sc.track.track_name.clone(),
-            track_config: sc
-                .track
-                .config_name
-                .as_ref()
-                .map(|c| c.clone())
-                .unwrap_or_default(),
-            track_cat: sc.track.category.clone(),
-            lc_name: n.to_lowercase(),
+        let sc = &season
+            .schedules
+            .iter()
+            .find(|w| w.race_week_num == season.race_week);
+        match sc {
+            Some(sc) => Some(SeasonInfo {
+                series_id: series.series_id,
+                name: n.to_string(),
+                reg_official: series.min_starters,
+                reg_split: series.max_starters,
+                week: season.race_week,
+                track_name: sc.track.track_name.clone(),
+                track_config: sc
+                    .track
+                    .config_name
+                    .as_ref()
+                    .map(|c| c.clone())
+                    .unwrap_or_default(),
+                track_cat: sc.track.category.clone(),
+                lc_name: n.to_lowercase(),
+            }),
+            None => {
+                println!(
+                    "Skipping Season with race_week={} but no matching schedule entry {}",
+                    season.race_week, season.season_name,
+                );
+                None
+            }
         }
     }
 }
