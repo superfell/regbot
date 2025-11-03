@@ -160,7 +160,7 @@ impl Db {
         )?;
         Ok(Db { con })
     }
-    pub fn start_series_update(&mut self) -> rusqlite::Result<SeriesUpdater> {
+    pub fn start_series_update(&mut self) -> rusqlite::Result<SeriesUpdater<'_>> {
         let tx = self.con.transaction()?;
         tx.execute("UPDATE series SET active=0", [])?;
         Ok(SeriesUpdater { tx })
