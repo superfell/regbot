@@ -35,9 +35,7 @@ impl SeasonInfo {
                 track_name: sc.track.track_name.clone(),
                 track_config: sc
                     .track
-                    .config_name
-                    .as_ref()
-                    .map(|c| c.clone())
+                    .config_name.clone()
                     .unwrap_or_default(),
                 track_cat: sc.track.category.clone(),
                 lc_name: n.to_lowercase(),

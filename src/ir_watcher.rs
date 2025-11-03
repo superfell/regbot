@@ -120,10 +120,7 @@ async fn iracing_loop(
         }
         let ann_count = announcements.len();
         if !announcements.is_empty() {
-            match tx.send(RaceGuideEvent::Announcements(announcements)).await {
-                Err(err) => println!("Failed to send RaceGuideEvent to channel {:?}", err),
-                _ => {}
-            }
+            if let Err(err) = tx.send(RaceGuideEvent::Announcements(announcements)).await { println!("Failed to send RaceGuideEvent to channel {:?}", err) }
         }
         println!(
             "all done for this time, sent {} announcements, took {}ms",
