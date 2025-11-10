@@ -33,10 +33,7 @@ impl SeasonInfo {
                 reg_split: series.max_starters,
                 week: season.race_week,
                 track_name: sc.track.track_name.clone(),
-                track_config: sc
-                    .track
-                    .config_name.clone()
-                    .unwrap_or_default(),
+                track_config: sc.track.config_name.clone().unwrap_or_default(),
                 track_cat: sc.track.category.clone(),
                 lc_name: n.to_lowercase(),
             }),

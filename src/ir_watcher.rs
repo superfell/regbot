@@ -18,6 +18,7 @@ pub enum RaceGuideEvent {
 pub async fn iracing_loop_task(
     user: String,
     password: String,
+    client_secret: String,
     mut tx: Sender<RaceGuideEvent>,
     state: Arc<Mutex<HandlerState>>,
 ) {
@@ -26,7 +27,16 @@ pub async fn iracing_loop_task(
     let mut backoff = def_backoff;
     let mut series_state = HashMap::new();
     loop {
-        match iracing_loop(&mut series_state, &user, &password, &mut tx, state.clone()).await {
+        match iracing_loop(
+            &mut series_state,
+            &user,
+            &password,
+            &client_secret,
+            &mut tx,
+            state.clone(),
+        )
+        .await
+        {
             Err(e) => {
                 println!("Error polling iRacing {:?}", e);
                 tokio::time::sleep(backoff).await;
@@ -87,11 +97,12 @@ async fn iracing_loop(
     series_state: &mut HashMap<i64, SeriesReg>,
     user: &str,
     password: &str,
+    client_secret: &str,
     tx: &mut Sender<RaceGuideEvent>,
     state: Arc<Mutex<HandlerState>>,
 ) -> anyhow::Result<()> {
     let loop_interval = tokio::time::Duration::from_secs(61);
-    let client = IrClient::new(user, password).await?;
+    let client = IrClient::new(user, password, client_secret).await?;
     //
     let mut series_updated = Utc::now();
     update_series_info(&client, series_state, tx, state.clone()).await?;
@@ -120,7 +131,9 @@ async fn iracing_loop(
         }
         let ann_count = announcements.len();
         if !announcements.is_empty() {
-            if let Err(err) = tx.send(RaceGuideEvent::Announcements(announcements)).await { println!("Failed to send RaceGuideEvent to channel {:?}", err) }
+            if let Err(err) = tx.send(RaceGuideEvent::Announcements(announcements)).await {
+                println!("Failed to send RaceGuideEvent to channel {:?}", err)
+            }
         }
         println!(
             "all done for this time, sent {} announcements, took {}ms",

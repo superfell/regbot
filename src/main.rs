@@ -152,6 +152,8 @@ async fn main() {
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     let ir_user = env::var("IRUSER").expect("Expected an iRacing username in the environment");
     let ir_pwd = env::var("IRPWD").expect("Expected an iRacing password in the environment");
+    let ir_client =
+        env::var("IRCLIENT").expect("Expected an iRacing client seceret in the environment");
 
     // Build our client.
     let db = Db::new("regbot.db");
@@ -174,7 +176,13 @@ async fn main() {
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<RaceGuideEvent>(2);
     handler.listen_for_race_guide(token.clone(), rx);
-    spawn(iracing_loop_task(ir_user, ir_pwd, tx, state.clone()));
+    spawn(iracing_loop_task(
+        ir_user,
+        ir_pwd,
+        ir_client,
+        tx,
+        state.clone(),
+    ));
 
     let mut client = Client::builder(token, GatewayIntents::non_privileged())
         .event_handler(handler)

@@ -1,49 +1,121 @@
 use anyhow::anyhow;
+use base64::encode;
 use chrono::{DateTime, Utc};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
+const AUTH_URL: &str = "https://oauth.iracing.com/oauth2/token";
 const IR_API: &str = "https://members-ng.iracing.com/data";
+const IR_CLIENT: &str = "regbot";
+const EXPIRY_BUFFER: Duration = Duration::from_secs(30);
 
 pub struct IrClient {
     client: reqwest::Client,
+    masked_client_secret: String,
+    auth: Mutex<Auth>,
 }
 
 impl IrClient {
-    pub async fn new(username: &str, password: &str) -> Result<IrClient, anyhow::Error> {
-        let c = reqwest::Client::builder().cookie_store(true).build()?;
+    pub async fn new(
+        username: &str,
+        password: &str,
+        client_secret: &str,
+    ) -> anyhow::Result<IrClient> {
+        let c = reqwest::Client::builder().build()?;
+        let masked_pwd = Self::mask(password, username);
+        let masked_client = Self::mask(client_secret, IR_CLIENT);
+        let mut params = HashMap::new();
+        params.insert("grant_type", "password_limited");
+        params.insert("client_secret", &masked_client);
+        params.insert("username", username);
+        params.insert("password", &masked_pwd);
+        params.insert("scope", "iracing.auth");
+        let auth = Self::token(&c, params).await?;
+        Ok(IrClient {
+            client: c,
+            auth: Mutex::new(auth),
+            masked_client_secret: masked_client,
+        })
+    }
 
-        let mut hasher = Sha256::new();
-        let normalized = username.trim().to_lowercase();
-        hasher.update(format!("{password}{normalized}"));
-        let encoded_auth = base64::encode(hasher.finalize());
+    // returns a new access token
+    async fn refresh(&self) -> anyhow::Result<String> {
+        let mut params = HashMap::new();
+        let t = self.auth.lock().unwrap().refresh.token.clone();
+        params.insert("grant_type", "refresh_token");
+        params.insert("client_secret", &self.masked_client_secret);
+        params.insert("refresh_token", &t);
+        let auth = Self::token(&self.client, params).await?;
+        let access = auth.access.token.clone();
+        *self.auth.lock().unwrap() = auth;
+        Ok(access)
+    }
 
-        let mut map = HashMap::new();
-        map.insert("email", username);
-        map.insert("password", &encoded_auth);
-        let req = c.post("https://members-ng.iracing.com/auth").json(&map);
-
+    // maka a call to the oauth token endpoint
+    async fn token(client: &Client, mut params: HashMap<&str, &str>) -> anyhow::Result<Auth> {
+        params.insert("client_id", IR_CLIENT);
+        let req = client.post(AUTH_URL).form(&params);
+        let start = Instant::now();
         let res = req.send().await?;
         if !res.status().is_success() {
-            println!("auth error: status {}", res.status());
+            println!("token error: status {}", res.status());
             let body = res.text().await?;
             println!("{}", body);
-            return Err(anyhow!("failed to authenticate: {}", body));
+            return Err(anyhow!("failed to refresh access token: {}", body));
         }
-        let _body = res.text().await?;
-        Ok(IrClient { client: c })
+        println!("got response from token API");
+        let auth_info: AuthResult = res.json().await?;
+        let access = Token {
+            token: auth_info.access_token.clone(),
+            expires: start + Duration::from_secs(auth_info.expires_in) - EXPIRY_BUFFER,
+        };
+        let refresh = Token {
+            token: auth_info.refresh_token,
+            expires: start + Duration::from_secs(auth_info.refresh_token_expires_in)
+                - EXPIRY_BUFFER,
+        };
+        Ok(Auth { access, refresh })
+    }
+
+    fn mask(secret: &str, id: &str) -> String {
+        let mut hasher = Sha256::new();
+        let normalized_id = id.trim().to_lowercase();
+        hasher.update(format!("{secret}{normalized_id}"));
+        encode(hasher.finalize())
+    }
+
+    // returns a current access token, making a call to refresh it if needed.
+    async fn access_token(&self) -> anyhow::Result<String> {
+        let t = {
+            let a = self.auth.lock().unwrap();
+            if a.access.expires < Instant::now() {
+                Err(())
+            } else {
+                Ok(a.access.token.clone())
+            }
+        };
+        match t {
+            Err(_) => self.refresh().await,
+            Ok(t) => Ok(t),
+        }
     }
 
     // returns the parsed result of the supplied url, dealing with the additional
     // "link" extra resolution needed by the iracing API.
-    pub async fn fetch<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<T, anyhow::Error> {
+    pub async fn fetch<T: serde::de::DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
+        let access_token = self.access_token().await?;
         let u = format!("{}/{}", IR_API, path);
         println!("starting iRacing request to {u}");
-        let req = self.client.get(u.clone());
+        let req = self
+            .client
+            .get(u.clone())
+            .header("Authorization", format!("bearer {access_token}"));
         let res = req.send().await?;
         if !res.status().is_success() {
             if res.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -81,7 +153,7 @@ impl IrClient {
     }
 
     #[allow(dead_code)]
-    pub async fn season_list(&self, year: i64, quarter: i64) -> Result<SeasonList, anyhow::Error> {
+    pub async fn season_list(&self, year: i64, quarter: i64) -> anyhow::Result<SeasonList> {
         assert!((1..=4).contains(&quarter));
         self.fetch(&format!(
             "season/list?season_year={}&season_quarter={}",
@@ -89,18 +161,36 @@ impl IrClient {
         ))
         .await
     }
-    pub async fn race_guide(&self) -> Result<RaceGuide, anyhow::Error> {
+    pub async fn race_guide(&self) -> anyhow::Result<RaceGuide> {
         self.fetch("season/race_guide").await
     }
-    pub async fn seasons(&self) -> Result<Vec<Season>, anyhow::Error> {
+    pub async fn seasons(&self) -> anyhow::Result<Vec<Season>> {
         self.fetch("series/seasons?include_series=false").await
     }
-    pub async fn series(&self) -> Result<Vec<Series>, anyhow::Error> {
+    pub async fn series(&self) -> anyhow::Result<Vec<Series>> {
         self.fetch("series/get").await
     }
 }
 
+struct Auth {
+    access: Token,
+    refresh: Token,
+}
+
+struct Token {
+    token: String,
+    expires: Instant,
+}
+
 /// JSON types
+
+#[derive(Deserialize, Debug)]
+struct AuthResult {
+    access_token: String,
+    expires_in: u64,
+    refresh_token: String,
+    refresh_token_expires_in: u64,
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Link {
@@ -188,6 +278,7 @@ pub struct Track {
     pub category: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Clone, Debug)]
 pub struct Series {
     pub category: String,
