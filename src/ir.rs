@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use base64::encode;
+use base64::{Engine, prelude::BASE64_STANDARD};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -87,7 +87,7 @@ impl IrClient {
         let mut hasher = Sha256::new();
         let normalized_id = id.trim().to_lowercase();
         hasher.update(format!("{secret}{normalized_id}"));
-        encode(hasher.finalize())
+        BASE64_STANDARD.encode(hasher.finalize())
     }
 
     // returns a current access token, making a call to refresh it if needed.
