@@ -73,8 +73,8 @@ async fn update_series_info(
                 }
             } else {
                 println!(
-                    "** Unable to find series {:?} in seasons, skipping its update",
-                    season
+                    "** Unable to find series {}:{} from seasons, skipping its update",
+                    season.series_id, season.season_name
                 );
             }
         }
