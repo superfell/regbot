@@ -1,19 +1,9 @@
+use serenity::all::{
+    CommandDataOption, CommandDataOptionValue, CommandInteraction, CommandOptionType, Context,
+    CreateAutocompleteResponse, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+    CreateInteractionResponseMessage, InteractionResponseFlags,
+};
 use serenity::async_trait;
-use serenity::model::prelude::interaction::application_command::{
-    CommandDataOption, CommandDataOptionValue,
-};
-use serenity::model::prelude::interaction::{InteractionResponseType, MessageFlags};
-use serenity::{
-    builder::CreateApplicationCommands,
-    model::prelude::{
-        command::CommandOptionType,
-        interaction::{
-            application_command::ApplicationCommandInteraction,
-            autocomplete::AutocompleteInteraction,
-        },
-    },
-    prelude::Context,
-};
 use std::sync::{Arc, Mutex};
 
 use crate::db::Reg;
@@ -23,11 +13,11 @@ use crate::HandlerState;
 pub trait ACommand: Send + Sync {
     fn name(&self) -> &str;
 
-    fn create(&self, _commands: &mut CreateApplicationCommands) {}
+    fn create(&self) -> CreateCommand;
 
-    async fn autocomplete(&self, _ctx: Context, _a: AutocompleteInteraction) {}
+    async fn autocomplete(&self, _ctx: Context, _a: CommandInteraction) {}
 
-    async fn execute(&self, _ctx: Context, _a: ApplicationCommandInteraction) {}
+    async fn execute(&self, _ctx: Context, _a: CommandInteraction) {}
 }
 
 pub struct RegCommand {
@@ -43,60 +33,76 @@ impl ACommand for RegCommand {
     fn name(&self) -> &str {
         "watch"
     }
-    fn create(&self, commands: &mut CreateApplicationCommands) {
-        commands
-                .create_application_command(|command| {
-                    command
-                        .name(self.name())
-                        .description("Ask Reg to announce race registration info for a particular series")
-                        .create_option(|option| -> &mut serenity::builder::CreateApplicationCommandOption {
-                            option
-                                .name("series")
-                                .description("The series to announce")
-                                .set_autocomplete(true)
-                                .kind(CommandOptionType::String)
-                                .required(true)
-                        })
-                        .create_option(|option| {
-                            option
-                                .name("min_reg")
-                                .description("The minimum number of registered race entries before making an announcement.")
-                                .kind(CommandOptionType::Integer)
-                                .min_int_value(0).max_int_value(1000)
-                                .required(false)
-                        }).create_option(|option| {
-                            option.name("max_reg").description("Stop making announcements after this many people are registered.").kind(CommandOptionType::Integer).required(false).min_int_value(1).max_int_value(1000)
-                        }).create_option(|option| {
-                            option.name("open").description("Always announce when registration opens").kind(CommandOptionType::Boolean).required(false)
-                        }).create_option(|option| {
-                            option.name("close").description("Always announce when registration closes").kind(CommandOptionType::Boolean).required(false)
-                        })
-                });
+    fn create(&self) -> CreateCommand {
+        CreateCommand::new(self.name())
+            .description("Ask Reg to announce race registration info for a particular series")
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "series",
+                    "The series to announce",
+                )
+                .set_autocomplete(true)
+                .required(true),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "min_reg",
+                    "The minimum number of registered race entries before making an announcement.",
+                )
+                .min_int_value(0)
+                .max_int_value(1000)
+                .required(false),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "max_reg",
+                    "Stop making announcements after this many people are registered.",
+                )
+                .required(false)
+                .min_int_value(1)
+                .max_int_value(1000),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Boolean,
+                    "open",
+                    "Always announce when registration opens",
+                )
+                .required(false),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Boolean,
+                    "close",
+                    "Always announce when registration closes",
+                )
+                .required(false),
+            )
     }
 
-    async fn autocomplete(&self, ctx: Context, autocomp: AutocompleteInteraction) {
+    async fn autocomplete(&self, ctx: Context, autocomp: CommandInteraction) {
         for opt in &autocomp.data.options {
-            if opt.focused && opt.name == "series" {
-                if let Err(e) = autocomp
-                    .create_autocomplete_response(&ctx.http, |response| {
-                        let search_txt = match &autocomp.data.options[0].value {
-                            Some(serde_json::Value::String(s)) => s,
-                            _ => "",
-                        };
-                        let mut count = 0;
-                        let lc_txt = search_txt.to_lowercase();
-                        let state = self.state.lock().expect("unable to lock state");
-                        for season in state.seasons.values() {
-                            if season.lc_name.contains(&lc_txt) {
-                                response.add_string_choice(&season.name, season.series_id);
-                                count += 1;
-                                if count == 25 {
-                                    break;
-                                }
+            if opt.name == "series" {
+                let mut response = CreateAutocompleteResponse::new();
+                let search_txt = opt.value.as_str().unwrap_or("").to_lowercase();
+                let mut count = 0;
+                {
+                    let state = self.state.lock().expect("unable to lock state");
+                    for season in state.seasons.values() {
+                        if season.lc_name.contains(&search_txt) {
+                            response = response.add_int_choice(&season.name, season.series_id);
+                            count += 1;
+                            if count == 25 {
+                                break;
                             }
                         }
-                        response
-                    })
+                    }
+                }
+                if let Err(e) = autocomp
+                    .create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response))
                     .await
                 {
                     println!("Failed to send autocomp response {:?}", e);
@@ -105,51 +111,54 @@ impl ACommand for RegCommand {
         }
     }
 
-    async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
+    async fn execute(&self, ctx: Context, command: CommandInteraction) {
         let series_id = match resolve_series_id(&ctx, &command).await {
             None => return,
             Some(i) => i,
         };
-        let msg: String;
         let open = resolve_option_bool(&command.data.options, "open").unwrap_or(false);
         let close = resolve_option_bool(&command.data.options, "close").unwrap_or(false);
         let maybe_min_reg = resolve_option_i64(&command.data.options, "min_reg");
         let maybe_max_reg = resolve_option_i64(&command.data.options, "max_reg");
-        let dbr: rusqlite::Result<usize>;
-        {
+        let result = {
             let mut st = self.state.lock().expect("couldn't lock state");
-            let series = &st.seasons[&series_id];
-            let min_reg = maybe_min_reg.unwrap_or(series.reg_official / 2);
-            let max_reg = maybe_max_reg
-                .unwrap_or(((series.reg_split - series.reg_official) / 2) + series.reg_official);
+            match st.seasons.get(&series_id) {
+                None => Err("unable to find series, please select one from the list"),
+                Some(series) => {
+                    let min_reg = maybe_min_reg.unwrap_or(series.reg_official / 2);
+                    let max_reg = maybe_max_reg.unwrap_or(
+                        ((series.reg_split - series.reg_official) / 2) + series.reg_official,
+                    );
+                    let max_reg = max_reg.max(min_reg + 1);
 
-            let reg = Reg {
-                guild: command.guild_id,
-                channel: command.channel_id,
-                series_id,
-                series_name: series.name.clone(),
-                min_reg,
-                max_reg,
-                open,
-                close,
-            };
-            msg = format!(
-                "Okay, I will message this channel about race registrations for {}",
-                &reg
-            );
-            dbr = st.db.upsert_reg(&reg, &command.user.name);
-        }
-        match dbr {
-            Err(e) => {
-                println!("db failed to upsert reg {:?}", e);
-                respond_error(
-                    &ctx,
-                    &command,
-                    "Sorry I appear to have lost my notepad, try again later.",
-                )
-                .await
+                    let reg = Reg {
+                        guild: command.guild_id,
+                        channel: command.channel_id,
+                        series_id,
+                        series_name: series.name.clone(),
+                        min_reg,
+                        max_reg,
+                        open,
+                        close,
+                    };
+                    st.db
+                        .upsert_reg(&reg, &command.user.name)
+                        .map(|_| {
+                            format!(
+                                "Okay, I will message this channel about race registrations for {}",
+                                &reg
+                            )
+                        })
+                        .map_err(|e| {
+                            println!("db failed to upsert reg {:?}", e);
+                            "Sorry I appear to have lost my notepad, try again later."
+                        })
+                }
             }
-            Ok(_) => respond_msg(&ctx, &command, &msg).await,
+        };
+        match result {
+            Err(e) => respond_error(&ctx, &command, e).await,
+            Ok(msg) => respond_msg(&ctx, &command, &msg).await,
         }
     }
 }
@@ -167,19 +176,15 @@ impl ACommand for ListCommand {
     fn name(&self) -> &str {
         "watching"
     }
-    fn create(&self, commands: &mut CreateApplicationCommands) {
-        commands.create_application_command(|command| {
-            command
-                .name(self.name())
-                .description("List the series that are being watched for this channel.")
-        });
+    fn create(&self) -> CreateCommand {
+        CreateCommand::new(self.name())
+            .description("List the series that are being watched for this channel.")
     }
-    async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
-        let regs: rusqlite::Result<Vec<Reg>>;
-        {
+    async fn execute(&self, ctx: Context, command: CommandInteraction) {
+        let regs = {
             let st = self.state.lock().expect("Unable to lock state");
-            regs = st.db.channel_regs(command.channel_id);
-        }
+            st.db.channel_regs(command.channel_id)
+        };
         match regs {
             Err(e) => {
                 println!("Failed to read watches {:?}", e);
@@ -224,52 +229,44 @@ impl ACommand for RemoveCommand {
     fn name(&self) -> &str {
         "nomore"
     }
-    fn create(&self, commands: &mut CreateApplicationCommands) {
-        commands.create_application_command(|command| {
-            command
-                .name(self.name())
-                .description("Stop reporting race registrations for a series.")
-                .create_option(
-                    |option| -> &mut serenity::builder::CreateApplicationCommandOption {
-                        option
-                            .name("series")
-                            .description("The series to announce")
-                            .set_autocomplete(true)
-                            .kind(CommandOptionType::String)
-                            .required(true)
-                    },
+    fn create(&self) -> CreateCommand {
+        CreateCommand::new(self.name())
+            .description("Stop reporting race registrations for a series.")
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::Integer,
+                    "series",
+                    "The series to stop watching",
                 )
-        });
+                .set_autocomplete(true)
+                .required(true),
+            )
     }
 
-    async fn autocomplete(&self, ctx: Context, autocomp: AutocompleteInteraction) {
+    async fn autocomplete(&self, ctx: Context, autocomp: CommandInteraction) {
         for opt in &autocomp.data.options {
-            if opt.focused && opt.name == "series" {
-                if let Err(e) = autocomp
-                    .create_autocomplete_response(&ctx.http, |response| {
-                        let search_txt = match &autocomp.data.options[0].value {
-                            Some(serde_json::Value::String(s)) => s,
-                            _ => "",
-                        };
-                        let mut count = 0;
-                        let lc_txt = search_txt.to_lowercase();
-
-                        let st = self.state.lock().expect("Unable to lock state");
-                        let regs = st
-                            .db
-                            .channel_regs(autocomp.channel_id)
-                            .expect("Failed to read db");
-                        for reg in regs {
-                            if reg.series_name.to_lowercase().contains(&lc_txt) {
-                                response.add_string_choice(&reg.series_name, reg.series_id);
-                                count += 1;
-                                if count == 25 {
-                                    break;
-                                }
+            if opt.name == "series" {
+                let search_txt = opt.value.as_str().unwrap_or("").to_lowercase();
+                let mut count = 0;
+                let mut response = CreateAutocompleteResponse::new();
+                {
+                    let st = self.state.lock().expect("Unable to lock state");
+                    let regs = st
+                        .db
+                        .channel_regs(autocomp.channel_id)
+                        .expect("Failed to read db");
+                    for reg in regs {
+                        if reg.series_name.to_lowercase().contains(&search_txt) {
+                            response = response.add_int_choice(&reg.series_name, reg.series_id);
+                            count += 1;
+                            if count == 25 {
+                                break;
                             }
                         }
-                        response
-                    })
+                    }
+                }
+                if let Err(e) = autocomp
+                    .create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response))
                     .await
                 {
                     println!("Failed to send autocomp response {:?}", e);
@@ -277,16 +274,16 @@ impl ACommand for RemoveCommand {
             }
         }
     }
-    async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
+
+    async fn execute(&self, ctx: Context, command: CommandInteraction) {
         let series_id = match resolve_series_id(&ctx, &command).await {
             None => return,
             Some(i) => i,
         };
-        let dbr;
-        {
+        let dbr = {
             let mut st = self.state.lock().expect("Unable to lock state");
-            dbr = st.db.delete_reg(command.channel_id, series_id);
-        }
+            st.db.delete_reg(command.channel_id, series_id)
+        };
         match dbr {
             Err(e) => {
                 println!("failed to remove registration {}", e);
@@ -304,8 +301,8 @@ impl ACommand for RemoveCommand {
     }
 }
 
-async fn resolve_series_id(ctx: &Context, command: &ApplicationCommandInteraction) -> Option<i64> {
-    let maybe_series_id = match command.data.options[0].resolved.as_ref().unwrap() {
+async fn resolve_series_id(ctx: &Context, command: &CommandInteraction) -> Option<i64> {
+    let maybe_series_id = match &command.data.options[0].value {
         CommandDataOptionValue::String(x) => x.parse(),
         CommandDataOptionValue::Integer(x) => Ok(*x),
         _ => Ok(414),
@@ -324,29 +321,30 @@ async fn resolve_series_id(ctx: &Context, command: &ApplicationCommandInteractio
     }
 }
 
-async fn respond_msg(ctx: &Context, command: &ApplicationCommandInteraction, msg: &str) {
+async fn respond_msg(ctx: &Context, command: &CommandInteraction, msg: &str) {
     if let Err(e) = command
-        .create_interaction_response(&ctx.http, |response| {
-            response
-                .kind(InteractionResponseType::ChannelMessageWithSource)
-                .interaction_response_data(|message| message.content(msg))
-        })
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new().content(msg),
+            ),
+        )
         .await
     {
         println!("Failed to respond to command {}", e);
     }
 }
 
-async fn respond_error(ctx: &Context, command: &ApplicationCommandInteraction, msg: &str) {
+async fn respond_error(ctx: &Context, command: &CommandInteraction, msg: &str) {
     if let Err(e) = command
-        .create_interaction_response(&ctx.http, |response| {
-            response
-                .kind(InteractionResponseType::ChannelMessageWithSource)
-                .interaction_response_data(|message| {
-                    message.flags(MessageFlags::EPHEMERAL);
-                    message.content(msg)
-                })
-        })
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .flags(InteractionResponseFlags::EPHEMERAL)
+                    .content(msg),
+            ),
+        )
         .await
     {
         println!("Failed to respond to command {}", e);
@@ -356,27 +354,24 @@ async fn respond_error(ctx: &Context, command: &ApplicationCommandInteraction, m
 fn resolve_option_i64(opts: &[CommandDataOption], opt_name: &str) -> Option<i64> {
     for o in opts {
         if o.name == opt_name {
-            return match o.resolved {
-                Some(CommandDataOptionValue::Integer(i)) => Some(i),
-                _ => {
-                    println!("unexpected int value for {} of {:?}", opt_name, o.resolved);
-                    None
-                }
-            };
-        }
+            let r = o.value.as_i64();
+            if r.is_none() {
+                println!("unexpected int value for {} of {:?}", opt_name, o.value);
+            }
+            return r;
+        };
     }
     None
 }
+
 fn resolve_option_bool(opts: &[CommandDataOption], opt_name: &str) -> Option<bool> {
     for o in opts {
         if o.name == opt_name {
-            return match o.resolved {
-                Some(CommandDataOptionValue::Boolean(i)) => Some(i),
-                _ => {
-                    println!("unexpected bool value for {} of {:?}", opt_name, o.resolved);
-                    None
-                }
-            };
+            let r = o.value.as_bool();
+            if r.is_none() {
+                println!("unexpected bool value for {} of {:?}", opt_name, o.value);
+            }
+            return r;
         }
     }
     None
@@ -399,14 +394,10 @@ impl ACommand for HelpCommand {
     fn name(&self) -> &str {
         "help"
     }
-    fn create(&self, commands: &mut CreateApplicationCommands) {
-        commands.create_application_command(|command| {
-            command
-                .name(self.name())
-                .description("Ask Reg what his deal is.")
-        });
+    fn create(&self) -> CreateCommand {
+        CreateCommand::new(self.name()).description("Ask Reg what his deal is.")
     }
-    async fn execute(&self, ctx: Context, command: ApplicationCommandInteraction) {
+    async fn execute(&self, ctx: Context, command: CommandInteraction) {
         respond_msg(&ctx, &command, HELP_MSG).await;
     }
 }

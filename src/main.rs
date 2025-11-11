@@ -2,15 +2,15 @@ use cmds::{ACommand, HelpCommand, ListCommand, RegCommand, RemoveCommand};
 use db::{Db, Reg, SeasonInfo};
 use ir_watcher::Announcement;
 use ir_watcher::{iracing_loop_task, RaceGuideEvent};
-use serenity::async_trait;
+use serenity::all::Interaction;
 use serenity::http::Http;
-use serenity::model::application::interaction::Interaction;
 use serenity::model::gateway::Ready;
 use serenity::model::prelude::{ChannelId, Guild, GuildChannel, GuildId, UnavailableGuild};
 use serenity::prelude::Context;
 use serenity::prelude::EventHandler;
 use serenity::prelude::GatewayIntents;
 use serenity::Client;
+use serenity::{all::Message, async_trait};
 use std::collections::HashMap;
 use std::env;
 use std::panic::{set_hook, take_hook};
@@ -68,16 +68,9 @@ impl Handler {
     }
     async fn install_commands(&self, ctx: &Context, guild_id: GuildId) {
         println!("Installing commands for guild {}", guild_id);
-        let _commands = guild_id
-            .set_application_commands(&ctx.http, |commands| {
-                for c in &self.commands {
-                    c.create(commands);
-                }
-                commands
-            })
-            .await;
-        if let Err(e) = _commands {
-            println!("Failed to install commands {:?}", e);
+        let commands = self.commands.iter().map(|c| c.create()).collect();
+        if let Err(e) = guild_id.set_commands(&ctx.http, commands).await {
+            println!("Failed to install commands {}", e);
         }
     }
 }
@@ -92,7 +85,7 @@ impl EventHandler for Handler {
                     break;
                 }
             }
-        } else if let Interaction::ApplicationCommand(command) = interaction {
+        } else if let Interaction::Command(command) = interaction {
             for c in &self.commands {
                 if command.data.name == c.name() {
                     c.execute(ctx, command).await;
@@ -119,22 +112,27 @@ impl EventHandler for Handler {
             }
         }
     }
-    async fn channel_delete(&self, _ctx: Context, _channel: &GuildChannel) {
+    async fn channel_delete(
+        &self,
+        _ctx: Context,
+        channel: GuildChannel,
+        _msgs: Option<Vec<Message>>,
+    ) {
         println!(
             "channel delete guild {} channel{}",
-            _channel.guild_id, _channel.id
+            channel.guild_id, channel.id
         );
         let mut st = self.state.lock().expect("Unable to lock state");
-        if let Err(e) = st.db.delete_channel(_channel.id) {
+        if let Err(e) = st.db.delete_channel(channel.id) {
             println!(
                 "Failed to delete reg entries for channel id {} {:?}",
-                _channel.id, e
+                channel.id, e
             );
         }
     }
-    async fn guild_create(&self, ctx: Context, guild: Guild, _is_new: bool) {
+    async fn guild_create(&self, ctx: Context, guild: Guild, is_new: Option<bool>) {
         // create commands in guild
-        println!("guild create {}/{}", guild.id, _is_new);
+        println!("guild create {}/{:?}", guild.id, is_new);
         self.install_commands(&ctx, guild.id).await;
     }
 
@@ -243,7 +241,6 @@ impl<'a> Messenger<'a> {
         if self.buf.len() + 1 + line.len() > 1950 {
             self.flush().await;
         }
-        //      if !self.buf.is_empty() {}
         self.buf.push_str(line);
         self.buf.push('\n')
     }

@@ -190,21 +190,23 @@ impl Db {
                     open    = excluded.open,
                     close   = excluded.close,
                     modified_date = excluded.created_date", 
-                params![reg.guild.map(|g|g.0), reg.channel.0, reg.series_id,reg.min_reg, reg.max_reg, reg.open, reg.close, created_by])
+                params![reg.guild.map(|g|g.get()), reg.channel.get(), reg.series_id,reg.min_reg, reg.max_reg, reg.open, reg.close, created_by])
     }
     pub fn delete_reg(&mut self, channel_id: ChannelId, series_id: i64) -> rusqlite::Result<usize> {
         self.con.execute(
             "DELETE FROM reg WHERE series_id=? AND channel_id=?",
-            params![series_id, channel_id.0],
+            params![series_id, channel_id.get()],
         )
     }
     pub fn delete_channel(&mut self, channel_id: ChannelId) -> rusqlite::Result<usize> {
-        self.con
-            .execute("DELETE FROM reg WHERE channel_id=?", params![channel_id.0])
+        self.con.execute(
+            "DELETE FROM reg WHERE channel_id=?",
+            params![channel_id.get()],
+        )
     }
     pub fn delete_guild(&mut self, guild_id: GuildId) -> rusqlite::Result<usize> {
         self.con
-            .execute("DELETE FROM reg WHERE guild_id=?", params![guild_id.0])
+            .execute("DELETE FROM reg WHERE guild_id=?", params![guild_id.get()])
     }
     pub fn regs(&self) -> rusqlite::Result<HashMap<ChannelId, Vec<Reg>>> {
         let mut res = HashMap::new();
@@ -215,7 +217,7 @@ impl Db {
     }
     pub fn channel_regs(&self, ch: ChannelId) -> rusqlite::Result<Vec<Reg>> {
         let mut res = Vec::new();
-        let filter = format!("WHERE r.channel_id={}", ch.0);
+        let filter = format!("WHERE r.channel_id={}", ch.get());
         self.query_regs(&filter, |r| res.push(r))?;
         Ok(res)
     }
@@ -239,8 +241,8 @@ fn to_reg(row: &Row) -> rusqlite::Result<Reg> {
     let g: Option<u64> = row.get("guild_id")?;
     let c: u64 = row.get("channel_id")?;
     Ok(Reg {
-        guild: g.map(GuildId),
-        channel: ChannelId(c),
+        guild: g.map(GuildId::new),
+        channel: ChannelId::new(c),
         series_id: row.get("series_id")?,
         series_name: row.get("series_name")?,
         min_reg: row.get("min_reg")?,
